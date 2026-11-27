@@ -3,7 +3,7 @@ import AdminConsole from './components/AdminConsole';
 import PublicScreenView from './components/PublicScreenView';
 import VoterView from './components/VoterView';
 import { useCeremonySocket } from './hooks/useCeremonySocket';
-import { resolveRouteMode } from './lib/routes';
+import { buildViewUrl, resolveRouteMode } from './lib/routes';
 import type { PublicCeremonyState } from './types';
 
 function IsolatedPublicScreenPage() {
@@ -13,15 +13,20 @@ function IsolatedPublicScreenPage() {
   return <PublicScreenView state={state} connected={connected} />;
 }
 
-function IsolatedVoterPage() {
+function IsolatedVoterPage({ showAdminFooter }: { showAdminFooter: boolean }) {
   const { state, connected, isStaticFallback } = useCeremonySocket<PublicCeremonyState>({
     role: 'voter',
   });
+  const adminHref = useMemo(
+    () => (showAdminFooter ? buildViewUrl('admin') : undefined),
+    [showAdminFooter]
+  );
   return (
     <VoterView
       state={state}
       connected={connected}
       isStaticFallback={isStaticFallback}
+      adminFooterHref={adminHref}
     />
   );
 }
@@ -29,13 +34,13 @@ function IsolatedVoterPage() {
 export default function App() {
   const routeMode = useMemo(() => resolveRouteMode(), []);
 
-  if (routeMode === 'vote') {
-    return <IsolatedVoterPage />;
+  if (routeMode === 'admin') {
+    return <AdminConsole />;
   }
 
   if (routeMode === 'screen') {
     return <IsolatedPublicScreenPage />;
   }
 
-  return <AdminConsole />;
+  return <IsolatedVoterPage showAdminFooter={routeMode === 'landing'} />;
 }

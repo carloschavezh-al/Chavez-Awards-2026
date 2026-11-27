@@ -13,6 +13,7 @@ interface VoterViewProps {
   connected?: boolean;
   isPreview?: boolean;
   isStaticFallback?: boolean;
+  adminFooterHref?: string;
 }
 
 const VOTER_TOKEN_STORAGE_KEY = 'gala_familiar_voter_token';
@@ -30,6 +31,7 @@ export default function VoterView({
   connected = true,
   isPreview = false,
   isStaticFallback = false,
+  adminFooterHref,
 }: VoterViewProps) {
   const [voterToken, setVoterToken] = useState<string | null>(() => {
     try {
@@ -553,6 +555,22 @@ export default function VoterView({
           </div>
         )}
       </main>
+
+      {/* Discreet bottom admin access link (only shown on root landing page, never on /votar) */}
+      {adminFooterHref && !isPreview && (
+        <footer
+          className={`py-4 px-4 text-center border-t border-stone-200/70 bg-[#FAF9F6] ${
+            isRegistered && canVoteNow ? 'pb-24' : ''
+          }`}
+        >
+          <a
+            href={adminFooterHref}
+            className="text-xs font-medium text-slate-500 hover:text-slate-900 underline underline-offset-4 transition-colors"
+          >
+            ¿Eres organizador? Acceso de administrador
+          </a>
+        </footer>
+      )}
 
       {/* Thumb-Zone Sticky Bottom Vote CTA (only when voter selected a nominee to confirm) */}
       {isRegistered && canVoteNow && (

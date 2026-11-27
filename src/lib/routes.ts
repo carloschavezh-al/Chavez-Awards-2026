@@ -1,4 +1,4 @@
-export type RouteMode = 'admin' | 'screen' | 'vote';
+export type RouteMode = 'landing' | 'admin' | 'screen' | 'vote';
 
 const BACKEND_URL_STORAGE_KEY = 'gala_familiar_backend_url';
 
@@ -70,7 +70,7 @@ export function resolveWsUrl(): string {
 }
 
 export function resolveRouteMode(): RouteMode {
-  if (typeof window === 'undefined') return 'admin';
+  if (typeof window === 'undefined') return 'landing';
 
   const hash = window.location.hash.toLowerCase().replace(/^#\/?/, '');
   if (hash === 'votar' || hash === 'vote') return 'vote';
@@ -90,8 +90,11 @@ export function resolveRouteMode(): RouteMode {
   if (pathname.endsWith('/pantalla') || pathname.endsWith('/screen')) {
     return 'screen';
   }
+  if (pathname.endsWith('/admin')) {
+    return 'admin';
+  }
 
-  return 'admin';
+  return 'landing';
 }
 
 export function getAppBasePath(): string {
@@ -104,7 +107,10 @@ export function getAppBasePath(): string {
 
 export function buildViewUrl(mode: RouteMode): string {
   if (typeof window === 'undefined') {
-    return mode === 'vote' ? '/votar' : mode === 'screen' ? '/pantalla' : '/';
+    if (mode === 'vote') return '/votar';
+    if (mode === 'screen') return '/pantalla';
+    if (mode === 'admin') return '/admin';
+    return '/';
   }
   const origin = window.location.origin;
   const basePath = getAppBasePath();
@@ -114,8 +120,17 @@ export function buildViewUrl(mode: RouteMode): string {
 
   let url: string;
   if (isRootHosting && !isGithubPages) {
-    const suffix = mode === 'vote' ? 'votar' : mode === 'screen' ? 'pantalla' : '';
+    const suffix =
+      mode === 'vote'
+        ? 'votar'
+        : mode === 'screen'
+        ? 'pantalla'
+        : mode === 'admin'
+        ? 'admin'
+        : '';
     url = `${origin}/${suffix}`;
+  } else if (mode === 'landing') {
+    url = `${origin}${basePath}`;
   } else {
     const viewParam = mode === 'vote' ? 'vote' : mode === 'screen' ? 'screen' : 'admin';
     url = `${origin}${basePath}?view=${viewParam}`;

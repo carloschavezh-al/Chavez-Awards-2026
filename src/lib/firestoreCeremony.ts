@@ -26,6 +26,14 @@ import type {
 } from '../types';
 
 export const AUTHORIZED_ADMIN_EMAIL = 'carloschavezh@outlook.com';
+export const DEFAULT_CEREMONY_TITLE = 'Chavez Awards 2026';
+
+function resolveCeremonyTitle(title?: string | null): string {
+  if (!title || title === 'Premios Familiares 2026') {
+    return DEFAULT_CEREMONY_TITLE;
+  }
+  return title;
+}
 
 const ACCENT_PALETTE = ['#D97706', '#0F766E', '#B45309', '#1D4ED8', '#BE123C', '#4338CA'];
 
@@ -155,12 +163,21 @@ export async function ensureInitialCeremonySeeded(): Promise<void> {
   const ceremonyRef = doc(db, 'ceremony', 'main');
   try {
     const existing = await getDoc(ceremonyRef);
-    if (existing.exists()) return;
+    if (existing.exists()) {
+      const data = existing.data() as Partial<FirestoreCeremonyDoc>;
+      if (data.ceremonyTitle === 'Premios Familiares 2026') {
+        await updateDoc(ceremonyRef, {
+          ceremonyTitle: DEFAULT_CEREMONY_TITLE,
+          updatedAt: serverTimestamp(),
+        });
+      }
+      return;
+    }
 
     const batch = writeBatch(db);
     const seedCats = getDefaultCategoriesSeed();
     batch.set(ceremonyRef, {
-      ceremonyTitle: 'Premios Familiares 2026',
+      ceremonyTitle: DEFAULT_CEREMONY_TITLE,
       ceremonySubtitle: 'Gala anual de reconocimientos en vivo',
       stageMode: 'lobby',
       activeCategoryId: seedCats[0].id,
@@ -200,7 +217,7 @@ export async function updateCeremonyInFirestore(
     batch.set(
       ceremonyRef,
       {
-        ceremonyTitle: nextTitle || 'Premios Familiares',
+        ceremonyTitle: nextTitle || DEFAULT_CEREMONY_TITLE,
         ceremonySubtitle: nextSubtitle,
         stageMode: nextStageMode,
         activeCategoryId: nextActiveId,
@@ -502,7 +519,7 @@ export function subscribeAdminFirestore(
   onError: (err: unknown) => void
 ): () => void {
   let ceremonyDoc: FirestoreCeremonyDoc = {
-    ceremonyTitle: 'Premios Familiares 2026',
+    ceremonyTitle: DEFAULT_CEREMONY_TITLE,
     ceremonySubtitle: 'Gala anual de reconocimientos en vivo',
     stageMode: 'lobby',
     activeCategoryId: null,
@@ -579,7 +596,7 @@ export function subscribeAdminFirestore(
       });
 
     onData({
-      ceremonyTitle: ceremonyDoc.ceremonyTitle,
+      ceremonyTitle: resolveCeremonyTitle(ceremonyDoc.ceremonyTitle),
       ceremonySubtitle: ceremonyDoc.ceremonySubtitle,
       stageMode: ceremonyDoc.stageMode,
       activeCategoryId: ceremonyDoc.activeCategoryId ?? sortedCats[0]?.id ?? null,
@@ -674,7 +691,7 @@ export function subscribePublicAudienceFirestore(
   const emit = () => {
     if (!ceremonyDoc) {
       onData({
-        ceremonyTitle: 'Premios Familiares 2026',
+        ceremonyTitle: DEFAULT_CEREMONY_TITLE,
         ceremonySubtitle: 'Gala anual de reconocimientos en vivo',
         stageMode: 'lobby',
         activeCategoryId: null,
@@ -736,7 +753,7 @@ export function subscribePublicAudienceFirestore(
     }
 
     onData({
-      ceremonyTitle: ceremonyDoc.ceremonyTitle,
+      ceremonyTitle: resolveCeremonyTitle(ceremonyDoc.ceremonyTitle),
       ceremonySubtitle: ceremonyDoc.ceremonySubtitle,
       stageMode: ceremonyDoc.stageMode,
       activeCategoryId: ceremonyDoc.activeCategoryId,

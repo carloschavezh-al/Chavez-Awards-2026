@@ -113,7 +113,7 @@ function createDefaultCategories(): Category[] {
 
 function createInitialStore(): CeremonyStore {
   return {
-    ceremonyTitle: 'Premios Familiares 2026',
+    ceremonyTitle: 'Chavez Awards 2026',
     ceremonySubtitle: 'Gala anual de reconocimientos en vivo',
     stageMode: 'lobby',
     activeCategoryId: 'cat-chef',

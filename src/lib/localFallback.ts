@@ -105,7 +105,7 @@ function getLocalStore(): LocalStore {
     // Ignore parse error
   }
   const initial: LocalStore = {
-    ceremonyTitle: 'Premios Familiares 2026',
+    ceremonyTitle: 'Chavez Awards 2026',
     ceremonySubtitle: 'Gala anual de reconocimientos en vivo',
     stageMode: 'lobby',
     activeCategoryId: 'cat-chef',

@@ -253,8 +253,9 @@ export default function AdminConsole() {
       if (message.includes('auth/popup-closed-by-user')) {
         setAuthError('Se cerró la ventana de inicio de sesión antes de completar el acceso.');
       } else if (message.includes('auth/unauthorized-domain')) {
+        const currentHost = typeof window !== 'undefined' ? window.location.hostname : '';
         setAuthError(
-          'Este dominio aún no está autorizado en Firebase Authentication. Agrégalo en Firebase Console → Authentication → Settings → Authorized domains.'
+          `El dominio "${currentHost}" aún no está autorizado en Firebase Authentication. Agrégalo en Firebase Console → Authentication → Settings → Authorized domains.`
         );
       } else {
         setAuthError('No se pudo iniciar sesión con Google. Intenta de nuevo.');

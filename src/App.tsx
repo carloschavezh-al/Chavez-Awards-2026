@@ -1,31 +1,51 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import AdminConsole from './components/AdminConsole';
 import PublicScreenView from './components/PublicScreenView';
 import VoterView from './components/VoterView';
-import { useCeremonySocket } from './hooks/useCeremonySocket';
+import { subscribePublicAudienceFirestore } from './lib/firestoreCeremony';
 import { buildViewUrl, resolveRouteMode } from './lib/routes';
 import type { PublicCeremonyState } from './types';
 
 function IsolatedPublicScreenPage() {
-  const { state, connected } = useCeremonySocket<PublicCeremonyState>({
-    role: 'screen',
-  });
+  const [state, setState] = useState<PublicCeremonyState | null>(null);
+  const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = subscribePublicAudienceFirestore('screen', (nextState) => {
+      setState(nextState);
+      setConnected(true);
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
   return <PublicScreenView state={state} connected={connected} />;
 }
 
 function IsolatedVoterPage({ showAdminFooter }: { showAdminFooter: boolean }) {
-  const { state, connected, isStaticFallback } = useCeremonySocket<PublicCeremonyState>({
-    role: 'voter',
-  });
+  const [state, setState] = useState<PublicCeremonyState | null>(null);
+  const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = subscribePublicAudienceFirestore('voter', (nextState) => {
+      setState(nextState);
+      setConnected(true);
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
   const adminHref = useMemo(
     () => (showAdminFooter ? buildViewUrl('admin') : undefined),
     [showAdminFooter]
   );
+
   return (
     <VoterView
       state={state}
       connected={connected}
-      isStaticFallback={isStaticFallback}
       adminFooterHref={adminHref}
     />
   );

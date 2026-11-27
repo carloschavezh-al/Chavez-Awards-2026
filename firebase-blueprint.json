@@ -1,0 +1,211 @@
+{
+  "entities": {
+    "CeremonyState": {
+      "title": "CeremonyState",
+      "description": "Global live ceremony state controlled by the administrator",
+      "type": "object",
+      "properties": {
+        "ceremonyTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Display title of the family awards ceremony"
+        },
+        "ceremonySubtitle": {
+          "type": "string",
+          "maxLength": 140,
+          "description": "Subtitle or welcome message shown on the lobby screen"
+        },
+        "stageMode": {
+          "type": "string",
+          "enum": ["lobby", "category", "closed", "winner", "summary"],
+          "description": "Current phase shown on the public presentation screen"
+        },
+        "activeCategoryId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "ID of the single category currently presented on stage and open for voting"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last update"
+        }
+      },
+      "required": ["ceremonyTitle", "ceremonySubtitle", "stageMode", "updatedAt"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Award category with nominees and voting status",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Category name"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 220,
+          "description": "Short category description"
+        },
+        "order": {
+          "type": "integer",
+          "description": "Display order index"
+        },
+        "isVotingOpen": {
+          "type": "boolean",
+          "description": "Whether voters can currently cast votes in this category"
+        },
+        "isWinnerRevealed": {
+          "type": "boolean",
+          "description": "Whether the winner has been revealed publicly"
+        },
+        "nominees": {
+          "type": "array",
+          "description": "Bounded list of nominees (2 to 20)"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["title", "description", "order", "isVotingOpen", "isWinnerRevealed", "nominees", "createdAt", "updatedAt"]
+    },
+    "CategoryResult": {
+      "title": "CategoryResult",
+      "description": "Published winner breakdown for a category once revealed by the admin",
+      "type": "object",
+      "properties": {
+        "categoryId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "categoryTitle": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "isRevealed": {
+          "type": "boolean"
+        },
+        "totalVotes": {
+          "type": "integer"
+        },
+        "breakdown": {
+          "type": "array",
+          "description": "Sorted nominee results with vote counts and percentages"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["categoryId", "categoryTitle", "isRevealed", "totalVotes", "breakdown", "updatedAt"]
+    },
+    "Voter": {
+      "title": "Voter",
+      "description": "Audience participant identified by a device ID and nickname",
+      "type": "object",
+      "properties": {
+        "voterId": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "voterName": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 50
+        },
+        "joinedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["voterId", "voterName", "joinedAt"]
+    },
+    "Vote": {
+      "title": "Vote",
+      "description": "Single ballot cast by a voter for a category (document ID = categoryId__voterId)",
+      "type": "object",
+      "properties": {
+        "categoryId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "nomineeId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "voterId": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "voterName": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 50
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["categoryId", "nomineeId", "voterId", "voterName", "createdAt"]
+    },
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Authorized admin UID registry",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "addedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["email", "addedAt"]
+    }
+  },
+  "firestore": {
+    "/ceremony/{docId}": {
+      "schema": { "$ref": "#/entities/CeremonyState" },
+      "description": "Singleton ceremony state document ('main')"
+    },
+    "/categories/{categoryId}": {
+      "schema": { "$ref": "#/entities/Category" },
+      "description": "Award categories and nominee lists"
+    },
+    "/results/{categoryId}": {
+      "schema": { "$ref": "#/entities/CategoryResult" },
+      "description": "Published winner breakdown revealed by the admin"
+    },
+    "/voters/{voterId}": {
+      "schema": { "$ref": "#/entities/Voter" },
+      "description": "Registered family participants"
+    },
+    "/votes/{voteId}": {
+      "schema": { "$ref": "#/entities/Vote" },
+      "description": "Single vote per category per voter enforced via composite ID categoryId__voterId"
+    },
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Admin authorization lookup"
+    }
+  }
+}

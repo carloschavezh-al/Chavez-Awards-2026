@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import confetti from 'canvas-confetti';
-import { Award, CheckCircle2, Lock, Smartphone, Trophy, Users } from 'lucide-react';
+import { Award, CheckCircle2, Lock, Smartphone, Trophy } from 'lucide-react';
 import STAGE_BACKDROP_SRC from '../assets/images/gala_stage_backdrop_1795747444467.jpg';
 import TROPHY_EMBLEM_SRC from '../assets/images/golden_trophy_emblem_1795747445110.jpg';
 import { buildViewUrl } from '../lib/routes';
@@ -81,16 +81,6 @@ export default function PublicScreenView({
     );
   }
 
-  const showTallies =
-    state.showLiveTalliesOnScreen ||
-    state.stageMode === 'winner' ||
-    state.stageMode === 'summary' ||
-    Boolean(activeCategory?.isWinnerRevealed);
-
-  const activeIndex = activeCategory
-    ? state.categories.findIndex((c) => c.id === activeCategory.id)
-    : -1;
-
   const winners = activeCategory ? getCategoryWinners(activeCategory) : [];
 
   return (
@@ -115,7 +105,7 @@ export default function PublicScreenView({
         <div className="absolute inset-0 bg-gradient-to-b from-[#0B0D12]/80 via-[#0B0D12]/70 to-[#0B0D12]/95" />
       </div>
 
-      {/* Broadcast Header Strip */}
+      {/* Broadcast Header Strip (never shows live vote tallies) */}
       <header className="relative z-10 flex flex-wrap items-center justify-between gap-4 px-6 sm:px-10 py-5 border-b border-white/10">
         <div className="min-w-0">
           <p className="font-display text-xl sm:text-2xl font-semibold tracking-wide text-[#F3E5AB] truncate">
@@ -123,37 +113,16 @@ export default function PublicScreenView({
           </p>
         </div>
 
-        <div className="flex items-center gap-5 text-xs sm:text-sm text-stone-300 tracking-wide">
-          <div className="flex items-center gap-2 whitespace-nowrap">
-            <Users className="w-4 h-4 text-[#D4AF37]" aria-hidden="true" />
-            <span className="font-mono-tabular font-medium text-stone-100">
-              {state.connectedVotersCount}
-            </span>
-            <span className="text-stone-400">conectados</span>
-          </div>
-          <span aria-hidden="true" className="text-stone-600">
-            ·
+        <div className="flex items-center gap-3 text-xs sm:text-sm text-stone-300 tracking-wide">
+          <span
+            className={`w-2 h-2 rounded-full ${
+              connected ? 'bg-emerald-400' : 'bg-amber-400'
+            }`}
+            aria-hidden="true"
+          />
+          <span className="text-stone-300">
+            {connected ? 'En vivo' : 'Reconectando'}
           </span>
-          <div className="flex items-center gap-2 whitespace-nowrap">
-            <span className="font-mono-tabular font-medium text-stone-100">
-              {state.totalVotesCast}
-            </span>
-            <span className="text-stone-400">votos totales</span>
-          </div>
-          <span aria-hidden="true" className="text-stone-600">
-            ·
-          </span>
-          <div className="flex items-center gap-2 whitespace-nowrap">
-            <span
-              className={`w-2 h-2 rounded-full ${
-                connected ? 'bg-emerald-400' : 'bg-amber-400'
-              }`}
-              aria-hidden="true"
-            />
-            <span className="text-stone-300">
-              {connected ? 'En vivo' : 'Reconectando'}
-            </span>
-          </div>
         </div>
       </header>
 
@@ -180,8 +149,8 @@ export default function PublicScreenView({
                   <p className="text-sm text-[#D4AF37] font-medium tracking-wide">
                     Bienvenidos a la premiación
                   </p>
-                  <p className="text-xs text-stone-400 mt-0.5 tabular-nums">
-                    {state.categories.length} categorías esta noche · {state.registeredVotersCount} familiares registrados
+                  <p className="text-xs text-stone-400 mt-0.5">
+                    Las categorías se irán presentando una a una en vivo
                   </p>
                 </div>
               </div>
@@ -195,33 +164,6 @@ export default function PublicScreenView({
                   {state.ceremonySubtitle}
                 </p>
               )}
-
-              {/* Upcoming Categories Preview */}
-              <div className="pt-4 border-t border-white/10">
-                <p className="text-xs font-medium text-stone-400 mb-3 tracking-wide">
-                  Categorías de la velada
-                </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {state.categories.map((cat, idx) => (
-                    <div
-                      key={cat.id}
-                      className="flex items-center justify-between gap-3 px-4 py-3 rounded-lg bg-[#141821]/85 border border-white/10"
-                    >
-                      <div className="min-w-0">
-                        <span className="font-mono-tabular text-xs text-[#D4AF37] mr-2">
-                          {String(idx + 1).padStart(2, '0')}.
-                        </span>
-                        <span className="text-sm font-medium text-stone-100 truncate">
-                          {cat.title}
-                        </span>
-                      </div>
-                      <span className="text-xs text-stone-400 shrink-0 tabular-nums">
-                        {cat.nominees.length} nominados
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
             </div>
 
             {/* QR Code Join Panel */}
@@ -254,9 +196,7 @@ export default function PublicScreenView({
             <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6 pb-6 border-b border-white/10">
               <div className="space-y-3 max-w-3xl">
                 <div className="flex items-center gap-3 text-sm text-[#D4AF37] font-medium tracking-wide">
-                  <span className="font-mono-tabular">
-                    Categoría {activeIndex + 1} de {state.categories.length}
-                  </span>
+                  <span>Categoría en curso</span>
                   <span aria-hidden="true">·</span>
                   <span
                     className={
@@ -288,17 +228,14 @@ export default function PublicScreenView({
                   <p className="text-xs font-medium text-[#F3E5AB]">
                     Escanea para votar
                   </p>
-                  <p className="font-mono-tabular text-xl font-semibold text-white">
-                    {activeCategory.totalVotes}{' '}
-                    <span className="text-xs font-normal text-stone-400">
-                      {activeCategory.totalVotes === 1 ? 'voto' : 'votos'}
-                    </span>
+                  <p className="text-xs text-stone-400">
+                    Elige tu favorito en tu celular
                   </p>
                 </div>
               </div>
             </div>
 
-            {/* Nominees Grid */}
+            {/* Nominees Options Only (never shows live vote tallies or percentages) */}
             <div
               className={`grid gap-5 ${
                 activeCategory.nominees.length <= 2
@@ -308,65 +245,36 @@ export default function PublicScreenView({
                   : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-4'
               }`}
             >
-              {activeCategory.nominees.map((nominee, idx) => {
-                const votes = nominee.votes ?? 0;
-                const pct = nominee.percentage ?? 0;
-                return (
-                  <div
-                    key={nominee.id}
-                    className="rounded-xl bg-[#141821]/95 border border-white/12 p-6 flex flex-col justify-between gap-5"
-                  >
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <span
-                          className="w-9 h-9 rounded-lg flex items-center justify-center font-mono-tabular text-sm font-semibold text-white shrink-0"
-                          style={{ backgroundColor: nominee.accentColor || '#D97706' }}
-                        >
-                          {idx + 1}
-                        </span>
-                        {showTallies && (
-                          <span className="font-mono-tabular text-lg font-semibold text-[#F3E5AB]">
-                            {pct.toFixed(0)}%
-                          </span>
-                        )}
-                      </div>
+              {activeCategory.nominees.map((nominee, idx) => (
+                <div
+                  key={nominee.id}
+                  className="rounded-xl bg-[#141821]/95 border border-white/12 p-6 flex flex-col justify-between gap-5"
+                >
+                  <div className="space-y-4">
+                    <span
+                      className="w-9 h-9 rounded-lg flex items-center justify-center font-mono-tabular text-sm font-semibold text-white shrink-0"
+                      style={{ backgroundColor: nominee.accentColor || '#D97706' }}
+                    >
+                      {idx + 1}
+                    </span>
 
-                      <div>
-                        <h2 className="font-display text-2xl font-semibold text-white leading-snug">
-                          {nominee.name}
-                        </h2>
-                        {nominee.subtitle && (
-                          <p className="text-sm text-stone-300 mt-1.5 leading-relaxed">
-                            {nominee.subtitle}
-                          </p>
-                        )}
-                      </div>
+                    <div>
+                      <h2 className="font-display text-2xl font-semibold text-white leading-snug">
+                        {nominee.name}
+                      </h2>
+                      {nominee.subtitle && (
+                        <p className="text-sm text-stone-300 mt-1.5 leading-relaxed">
+                          {nominee.subtitle}
+                        </p>
+                      )}
                     </div>
-
-                    {showTallies ? (
-                      <div className="space-y-2 pt-3 border-t border-white/10">
-                        <div className="h-2.5 w-full rounded-full bg-white/10 overflow-hidden">
-                          <div
-                            className="h-full rounded-full transition-all duration-500"
-                            style={{
-                              width: `${Math.max(pct, votes > 0 ? 4 : 0)}%`,
-                              backgroundColor: nominee.accentColor || '#D4AF37',
-                            }}
-                          />
-                        </div>
-                        <div className="flex items-center justify-between text-xs text-stone-400 font-mono-tabular">
-                          <span>{votes} {votes === 1 ? 'voto' : 'votos'}</span>
-                          <span>{pct.toFixed(1)}%</span>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="pt-3 border-t border-white/10 text-xs text-stone-400">
-                        Nominado oficial
-                      </div>
-                    )}
                   </div>
-                );
-              })}
+
+                  <div className="pt-3 border-t border-white/10 text-xs text-stone-400">
+                    Opción de votación
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -385,11 +293,7 @@ export default function PublicScreenView({
                 Recuento oficial en curso
               </h1>
               <p className="text-lg text-stone-300">
-                Hemos recibido{' '}
-                <span className="font-mono-tabular font-semibold text-[#F3E5AB]">
-                  {activeCategory.totalVotes}
-                </span>{' '}
-                {activeCategory.totalVotes === 1 ? 'voto' : 'votos'} para esta categoría. En breve anunciaremos al ganador.
+                Las votaciones para esta categoría han cerrado. En breve anunciaremos al ganador.
               </p>
             </div>
           </div>
@@ -495,44 +399,50 @@ export default function PublicScreenView({
               </h1>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              {state.categories.map((cat, idx) => {
-                const catWinners = getCategoryWinners(cat);
-                return (
-                  <div
-                    key={cat.id}
-                    className="rounded-xl bg-[#141821]/95 border border-white/12 p-6 flex flex-col justify-between gap-4"
-                  >
-                    <div className="space-y-1">
-                      <p className="text-xs font-mono-tabular text-[#D4AF37]">
-                        Categoría {String(idx + 1).padStart(2, '0')}
-                      </p>
-                      <h2 className="font-display text-xl font-semibold text-white">
-                        {cat.title}
-                      </h2>
-                    </div>
+            {state.categories.length === 0 ? (
+              <div className="max-w-xl mx-auto rounded-2xl bg-[#141821] border border-white/10 p-8 text-center text-stone-300">
+                Aún no se han revelado ganadores en esta ceremonia.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                {state.categories.map((cat, idx) => {
+                  const catWinners = getCategoryWinners(cat);
+                  return (
+                    <div
+                      key={cat.id}
+                      className="rounded-xl bg-[#141821]/95 border border-white/12 p-6 flex flex-col justify-between gap-4"
+                    >
+                      <div className="space-y-1">
+                        <p className="text-xs font-mono-tabular text-[#D4AF37]">
+                          Categoría {String(idx + 1).padStart(2, '0')}
+                        </p>
+                        <h2 className="font-display text-xl font-semibold text-white">
+                          {cat.title}
+                        </h2>
+                      </div>
 
-                    {catWinners.length > 0 ? (
-                      <div className="flex items-center justify-between gap-4 pt-3 border-t border-white/10">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <CheckCircle2 className="w-5 h-5 text-[#D4AF37] shrink-0" aria-hidden="true" />
-                          <span className="font-display text-xl font-semibold text-[#F3E5AB] truncate">
-                            {catWinners.map((w) => w.name).join(' & ')}
+                      {catWinners.length > 0 ? (
+                        <div className="flex items-center justify-between gap-4 pt-3 border-t border-white/10">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <CheckCircle2 className="w-5 h-5 text-[#D4AF37] shrink-0" aria-hidden="true" />
+                            <span className="font-display text-xl font-semibold text-[#F3E5AB] truncate">
+                              {catWinners.map((w) => w.name).join(' & ')}
+                            </span>
+                          </div>
+                          <span className="font-mono-tabular text-sm text-stone-300 shrink-0">
+                            {catWinners[0].votes} votos · {(catWinners[0].percentage ?? 0).toFixed(0)}%
                           </span>
                         </div>
-                        <span className="font-mono-tabular text-sm text-stone-300 shrink-0">
-                          {catWinners[0].votes} votos · {(catWinners[0].percentage ?? 0).toFixed(0)}%
-                        </span>
-                      </div>
-                    ) : (
-                      <div className="pt-3 border-t border-white/10 text-sm text-stone-400">
-                        Sin votos registrados todavía
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+                      ) : (
+                        <div className="pt-3 border-t border-white/10 text-sm text-stone-400">
+                          Sin votos registrados todavía
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
       </main>

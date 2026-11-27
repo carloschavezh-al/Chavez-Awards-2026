@@ -1,22 +1,24 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Award, Check, CheckCircle2, Lock, Trophy, UserCheck } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import {
-  castLocalVote,
-  getLocalVoterSession,
-  registerLocalVoter,
-} from '../lib/localFallback';
-import { resolveApiUrl } from '../lib/routes';
+  castVoteInFirestore,
+  fetchVoterProfileInFirestore,
+  fetchVoterVoteForCategory,
+  generateSafeId,
+  registerVoterInFirestore,
+} from '../lib/firestoreCeremony';
 import type { PublicCategoryState, PublicCeremonyState, VoterVoteMap } from '../types';
 
 interface VoterViewProps {
   state: PublicCeremonyState | null;
   connected?: boolean;
   isPreview?: boolean;
-  isStaticFallback?: boolean;
   adminFooterHref?: string;
 }
 
-const VOTER_TOKEN_STORAGE_KEY = 'gala_familiar_voter_token';
+const VOTER_ID_STORAGE_KEY = 'gala_familiar_firebase_voter_id';
+const VOTER_NAME_STORAGE_KEY = 'gala_familiar_firebase_voter_name';
 
 function getCategoryWinners(category: PublicCategoryState) {
   const withCounts = category.nominees.filter((n) => typeof n.votes === 'number');
@@ -30,102 +32,96 @@ export default function VoterView({
   state,
   connected = true,
   isPreview = false,
-  isStaticFallback = false,
   adminFooterHref,
 }: VoterViewProps) {
-  const [voterToken, setVoterToken] = useState<string | null>(() => {
+  const [voterId, setVoterId] = useState<string>(() => {
     try {
-      return window.localStorage.getItem(VOTER_TOKEN_STORAGE_KEY);
+      const existing = window.localStorage.getItem(VOTER_ID_STORAGE_KEY);
+      if (existing) return existing;
+      const fresh = generateSafeId('voter');
+      window.localStorage.setItem(VOTER_ID_STORAGE_KEY, fresh);
+      return fresh;
     } catch {
-      return null;
+      return generateSafeId('voter');
     }
   });
-  const [voterName, setVoterName] = useState<string>('');
+  const [voterName, setVoterName] = useState<string>(() => {
+    try {
+      return window.localStorage.getItem(VOTER_NAME_STORAGE_KEY) || '';
+    } catch {
+      return '';
+    }
+  });
   const [nameInput, setNameInput] = useState<string>('');
   const [isRegistered, setIsRegistered] = useState<boolean>(false);
   const [checkingSession, setCheckingSession] = useState<boolean>(true);
   const [myVotes, setMyVotes] = useState<VoterVoteMap>({});
 
-  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
   const [pendingNomineeId, setPendingNomineeId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [justVotedMessage, setJustVotedMessage] = useState<string | null>(null);
 
-  // Restore existing voter session on mount
+  // Restore existing voter registration from Firestore
   useEffect(() => {
     let cancelled = false;
-    const loadSession = async () => {
-      if (isStaticFallback) {
-        const local = getLocalVoterSession();
-        if (!cancelled && local.registered && local.voterToken) {
-          setIsRegistered(true);
-          setVoterName(local.voterName ?? 'Invitado');
-          setVoterToken(local.voterToken);
-          setMyVotes(local.myVotes ?? {});
-        }
-        if (!cancelled) setCheckingSession(false);
-        return;
-      }
-
+    const loadProfile = async () => {
       try {
-        const headers: Record<string, string> = {};
-        if (voterToken) {
-          headers['x-voter-token'] = voterToken;
-        }
-        const res = await fetch(resolveApiUrl('/api/voter/session'), { headers });
-        const ct = res.headers.get('content-type') || '';
-        if (!res.ok || !ct.includes('application/json')) return;
-        const data = (await res.json()) as {
-          registered: boolean;
-          voterName?: string;
-          voterToken?: string;
-          myVotes?: VoterVoteMap;
-        };
-        if (!cancelled && data.registered && data.voterToken) {
+        const profile = await fetchVoterProfileInFirestore(voterId);
+        if (!cancelled && profile) {
+          setVoterName(profile.voterName);
           setIsRegistered(true);
-          setVoterName(data.voterName ?? 'Invitado');
-          setVoterToken(data.voterToken);
-          setMyVotes(data.myVotes ?? {});
           try {
-            window.localStorage.setItem(VOTER_TOKEN_STORAGE_KEY, data.voterToken);
+            window.localStorage.setItem(VOTER_NAME_STORAGE_KEY, profile.voterName);
           } catch {
-            // Ignore storage restriction
+            // Ignore storage error
           }
         }
       } catch {
-        // Ignore network error during session check
+        // Ignore initial lookup error
       } finally {
         if (!cancelled) setCheckingSession(false);
       }
     };
-    loadSession();
+    loadProfile();
     return () => {
       cancelled = true;
     };
-  }, [isStaticFallback]);
-
-  // Follow the presenter's active category automatically when stage updates
-  useEffect(() => {
-    if (!state) return;
-    if (state.activeCategoryId) {
-      setSelectedCategoryId(state.activeCategoryId);
-      setPendingNomineeId(null);
-      setErrorMsg(null);
-    } else if (state.categories.length > 0 && !selectedCategoryId) {
-      setSelectedCategoryId(state.categories[0].id);
-    }
-  }, [state?.activeCategoryId]);
+  }, [voterId]);
 
   const activeCategory = useMemo(() => {
     if (!state) return null;
-    return (
-      state.categories.find((c) => c.id === selectedCategoryId) ??
-      state.categories.find((c) => c.id === state.activeCategoryId) ??
-      state.categories[0] ??
-      null
-    );
-  }, [state, selectedCategoryId]);
+    if (state.stageMode === 'lobby' || state.stageMode === 'summary') return null;
+    if (!state.activeCategoryId) return null;
+    return state.categories.find((c) => c.id === state.activeCategoryId) ?? null;
+  }, [state]);
+
+  // Reset selection & verify if this voter already voted in the newly active category
+  useEffect(() => {
+    setPendingNomineeId(null);
+    setErrorMsg(null);
+    setJustVotedMessage(null);
+
+    if (!activeCategory || !isRegistered) return;
+    let cancelled = false;
+    fetchVoterVoteForCategory(activeCategory.id, voterId).then((nomineeId) => {
+      if (cancelled) return;
+      setMyVotes((prev) => {
+        if (nomineeId) {
+          return { ...prev, [activeCategory.id]: nomineeId };
+        }
+        if (activeCategory.id in prev) {
+          const next = { ...prev };
+          delete next[activeCategory.id];
+          return next;
+        }
+        return prev;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeCategory?.id, activeCategory?.isVotingOpen, isRegistered, voterId]);
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -137,45 +133,19 @@ export default function VoterView({
     setSubmitting(true);
     setErrorMsg(null);
     try {
-      if (isStaticFallback) {
-        const local = registerLocalVoter(clean);
-        setVoterToken(local.voterToken);
-        setVoterName(local.voterName);
-        setMyVotes(local.myVotes);
-        setIsRegistered(true);
-        return;
-      }
-
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (voterToken) headers['x-voter-token'] = voterToken;
-      const res = await fetch(resolveApiUrl('/api/voter/register'), {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ name: clean }),
-      });
-      const data = (await res.json()) as {
-        error?: string;
-        voterName?: string;
-        voterToken?: string;
-        myVotes?: VoterVoteMap;
-      };
-      if (!res.ok) {
-        setErrorMsg(data.error ?? 'No se pudo registrar tu acceso.');
-        return;
-      }
-      if (data.voterToken) {
-        setVoterToken(data.voterToken);
-        try {
-          window.localStorage.setItem(VOTER_TOKEN_STORAGE_KEY, data.voterToken);
-        } catch {
-          // Ignore storage error
-        }
-      }
-      setVoterName(data.voterName ?? clean);
-      setMyVotes(data.myVotes ?? {});
+      const idToUse = voterId || generateSafeId('voter');
+      await registerVoterInFirestore(idToUse, clean);
+      setVoterId(idToUse);
+      setVoterName(clean);
       setIsRegistered(true);
+      try {
+        window.localStorage.setItem(VOTER_ID_STORAGE_KEY, idToUse);
+        window.localStorage.setItem(VOTER_NAME_STORAGE_KEY, clean);
+      } catch {
+        // Ignore storage error
+      }
     } catch {
-      setErrorMsg('Error de conexión. Inténtalo de nuevo.');
+      setErrorMsg('No se pudo registrar tu acceso. Inténtalo de nuevo.');
     } finally {
       setSubmitting(false);
     }
@@ -187,52 +157,32 @@ export default function VoterView({
     setErrorMsg(null);
     setJustVotedMessage(null);
     try {
-      if (isStaticFallback) {
-        const local = castLocalVote(activeCategory.id, pendingNomineeId);
-        if (local.error) {
-          setErrorMsg(local.error);
-          return;
-        }
-        if (local.myVotes) setMyVotes(local.myVotes);
-        const chosen = activeCategory.nominees.find((n) => n.id === pendingNomineeId);
-        setJustVotedMessage(
-          chosen ? `Voto registrado para ${chosen.name}` : 'Voto registrado correctamente'
-        );
-        setPendingNomineeId(null);
-        return;
-      }
-
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (voterToken) headers['x-voter-token'] = voterToken;
-
-      const res = await fetch(resolveApiUrl('/api/vote'), {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          categoryId: activeCategory.id,
-          nomineeId: pendingNomineeId,
-        }),
+      await castVoteInFirestore({
+        categoryId: activeCategory.id,
+        nomineeId: pendingNomineeId,
+        voterId,
+        voterName: voterName || 'Invitado',
       });
-      const data = (await res.json()) as {
-        error?: string;
-        myVotes?: VoterVoteMap;
-      };
-      if (!res.ok) {
-        setErrorMsg(data.error ?? 'No se pudo registrar tu voto.');
-        return;
-      }
-      if (data.myVotes) {
-        setMyVotes(data.myVotes);
-      } else {
-        setMyVotes((prev) => ({ ...prev, [activeCategory.id]: pendingNomineeId }));
-      }
+      setMyVotes((prev) => ({ ...prev, [activeCategory.id]: pendingNomineeId }));
       const chosen = activeCategory.nominees.find((n) => n.id === pendingNomineeId);
       setJustVotedMessage(
         chosen ? `Voto registrado para ${chosen.name}` : 'Voto registrado correctamente'
       );
       setPendingNomineeId(null);
-    } catch {
-      setErrorMsg('No se pudo conectar con el servidor. Verifica tu internet.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg.includes('Missing or insufficient permissions') || msg.includes('already exists')) {
+        // Re-check if already voted or voting closed
+        const existing = await fetchVoterVoteForCategory(activeCategory.id, voterId);
+        if (existing) {
+          setMyVotes((prev) => ({ ...prev, [activeCategory.id]: existing }));
+          setErrorMsg('Ya emitiste tu voto en esta categoría. Solo se permite 1 voto por categoría.');
+        } else {
+          setErrorMsg('La votación para esta categoría está cerrada en este momento.');
+        }
+      } else {
+        setErrorMsg('No se pudo registrar tu voto. Verifica tu conexión e inténtalo de nuevo.');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -255,7 +205,12 @@ export default function VoterView({
   const hasVotedInActive = Boolean(votedNomineeId);
   const votedNominee = activeCategory?.nominees.find((n) => n.id === votedNomineeId);
   const pendingNominee = activeCategory?.nominees.find((n) => n.id === pendingNomineeId);
-  const canVoteNow = Boolean(activeCategory && activeCategory.isVotingOpen && !hasVotedInActive);
+  const canVoteNow = Boolean(
+    activeCategory &&
+      state.stageMode === 'category' &&
+      activeCategory.isVotingOpen &&
+      !hasVotedInActive
+  );
   const activeWinners = activeCategory ? getCategoryWinners(activeCategory) : [];
 
   return (
@@ -300,7 +255,7 @@ export default function VoterView({
                 {state.ceremonyTitle}
               </h1>
               <p className="text-sm text-slate-600 leading-relaxed">
-                Ingresa tu nombre o parentesco para participar. Podrás emitir 1 voto por cada categoría abierta.
+                Ingresa tu nombre o parentesco para participar. Podrás emitir 1 voto por cada categoría conforme el anfitrión la vaya presentando.
               </p>
             </div>
 
@@ -341,69 +296,25 @@ export default function VoterView({
           </div>
         ) : (
           <div className="space-y-6">
-            {/* Voter Identity & Progress Summary */}
+            {/* Voter Identity */}
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 pb-3 border-b border-stone-200">
               <span>
                 Participante: <strong className="text-slate-900">{voterName}</strong>
               </span>
-              <span className="tabular-nums">
-                {Object.keys(myVotes).length} de {state.categories.length} categorías votadas
-              </span>
+              <span>Categoría en curso</span>
             </div>
 
-            {/* Category Selector Tabs */}
-            <div className="space-y-2">
-              <p className="text-xs font-medium text-slate-500">Categorías</p>
-              <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                {state.categories.map((cat, idx) => {
-                  const isSelected = activeCategory?.id === cat.id;
-                  const voted = Boolean(myVotes[cat.id]);
-                  const isLiveActive = state.activeCategoryId === cat.id;
-                  return (
-                    <button
-                      key={cat.id}
-                      type="button"
-                      onClick={() => {
-                        setSelectedCategoryId(cat.id);
-                        setPendingNomineeId(null);
-                        setErrorMsg(null);
-                        setJustVotedMessage(null);
-                      }}
-                      className={`min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-medium whitespace-nowrap shrink-0 flex items-center gap-2 border transition-colors ${
-                        isSelected
-                          ? 'bg-slate-900 text-white border-slate-900'
-                          : 'bg-white text-slate-700 border-stone-200 hover:border-stone-300'
-                      }`}
-                    >
-                      <span className="font-mono-tabular opacity-75">
-                        {String(idx + 1).padStart(2, '0')}.
-                      </span>
-                      <span className="max-w-[160px] truncate">{cat.title}</span>
-                      {voted ? (
-                        <CheckCircle2
-                          className={`w-3.5 h-3.5 shrink-0 ${
-                            isSelected ? 'text-emerald-300' : 'text-emerald-600'
-                          }`}
-                          aria-label="Votada"
-                        />
-                      ) : cat.isVotingOpen ? (
-                        <span
-                          className={`w-2 h-2 rounded-full shrink-0 ${
-                            isSelected ? 'bg-amber-300' : 'bg-amber-600'
-                          }`}
-                          aria-label="Abierta"
-                        />
-                      ) : isLiveActive ? null : null}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Lobby Notice when ceremony hasn't opened current stage yet and no category is open */}
-            {state.stageMode === 'lobby' &&
-              !state.categories.some((c) => c.isVotingOpen) && (
-                <div className="rounded-2xl bg-white border border-stone-200 p-6 sm:p-8 text-center space-y-3">
+            <AnimatePresence mode="wait" initial={false}>
+              {/* Lobby / Waiting State (NO upcoming categories revealed) */}
+              {(state.stageMode === 'lobby' || (!activeCategory && state.stageMode !== 'summary')) && (
+                <motion.div
+                  key="stage-lobby"
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -12 }}
+                  transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+                  className="rounded-2xl bg-white border border-stone-200 p-6 sm:p-10 text-center space-y-3 mt-4"
+                >
                   <div className="w-12 h-12 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center mx-auto">
                     <Trophy className="w-6 h-6 text-amber-700" aria-hidden="true" />
                   </div>
@@ -411,147 +322,202 @@ export default function VoterView({
                     La ceremonia comenzará en breve
                   </h2>
                   <p className="text-sm text-slate-600 max-w-md mx-auto leading-relaxed">
-                    Mantén esta pantalla abierta en tu dispositivo. En cuanto el anfitrión abra una categoría, aparecerá aquí lista para votar.
+                    Mantén esta pantalla abierta. En cuanto el anfitrión presente una categoría y abra la votación, aparecerá aquí automáticamente.
                   </p>
-                </div>
+                </motion.div>
               )}
 
-            {/* Active Category Voting Card */}
-            {activeCategory && (
-              <section className="space-y-5">
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
-                    {activeCategory.isVotingOpen ? (
-                      <span className="text-emerald-700">Votación abierta</span>
-                    ) : (
-                      <span className="text-slate-500 inline-flex items-center gap-1">
-                        <Lock className="w-3.5 h-3.5" aria-hidden="true" />
-                        Votación cerrada
+              {/* Final Summary State */}
+              {state.stageMode === 'summary' && (
+                <motion.div
+                  key="stage-summary"
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -12 }}
+                  transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+                  className="rounded-2xl bg-white border border-stone-200 p-6 sm:p-10 text-center space-y-3 mt-4"
+                >
+                  <div className="w-12 h-12 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center mx-auto">
+                    <Award className="w-6 h-6 text-amber-700" aria-hidden="true" />
+                  </div>
+                  <h2 className="font-display text-2xl font-semibold text-slate-900 text-balance">
+                    ¡Gracias por votar!
+                  </h2>
+                  <p className="text-sm text-slate-600 max-w-md mx-auto leading-relaxed">
+                    La premiación ha concluido. Mira el cuadro final de ganadores en la pantalla principal.
+                  </p>
+                </motion.div>
+              )}
+
+              {/* Single Active Category Voting Card (ONLY what the admin is presenting) */}
+              {activeCategory && (
+                <motion.section
+                  key={`category-${activeCategory.id}`}
+                  initial={{ opacity: 0, y: 14, scale: 0.99 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -14, scale: 0.99 }}
+                  transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+                  className="space-y-5"
+                >
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
+                      {state.stageMode === 'category' && activeCategory.isVotingOpen ? (
+                        <span className="text-emerald-700">Votación abierta</span>
+                      ) : (
+                        <span className="text-slate-500 inline-flex items-center gap-1">
+                          <Lock className="w-3.5 h-3.5" aria-hidden="true" />
+                          Votación cerrada
+                        </span>
+                      )}
+                      <span aria-hidden="true" className="text-stone-300">
+                        ·
                       </span>
+                      <span className="text-slate-500">1 voto por categoría</span>
+                    </div>
+
+                    <h1 className="font-display text-2xl sm:text-3xl font-semibold text-slate-900 text-balance">
+                      {activeCategory.title}
+                    </h1>
+                    {activeCategory.description && (
+                      <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
+                        {activeCategory.description}
+                      </p>
                     )}
-                    <span aria-hidden="true" className="text-stone-300">
-                      ·
-                    </span>
-                    <span className="text-slate-500">1 voto por categoría</span>
                   </div>
 
-                  <h1 className="font-display text-2xl sm:text-3xl font-semibold text-slate-900 text-balance">
-                    {activeCategory.title}
-                  </h1>
-                  {activeCategory.description && (
-                    <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
-                      {activeCategory.description}
-                    </p>
-                  )}
-                </div>
-
-                {/* Winner Announced Banner for Voter */}
-                {activeCategory.isWinnerRevealed && activeWinners.length > 0 && (
-                  <div className="rounded-2xl bg-amber-50 border border-amber-300 p-5 flex items-center gap-4">
-                    <div className="w-11 h-11 rounded-xl bg-amber-700 text-white flex items-center justify-center shrink-0">
-                      <Award className="w-6 h-6" aria-hidden="true" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs font-medium text-amber-800">
-                        {activeWinners.length > 1 ? 'Empate ganador' : 'Ganador anunciado'}
-                      </p>
-                      <p className="font-display text-xl font-semibold text-slate-900 truncate">
-                        {activeWinners.map((w) => w.name).join(' & ')}
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {/* Locked confirmation when user already voted in this category */}
-                {hasVotedInActive && (
-                  <div className="rounded-2xl bg-emerald-50 border border-emerald-200 p-4 sm:p-5 flex items-start gap-3">
-                    <CheckCircle2
-                      className="w-5 h-5 text-emerald-700 shrink-0 mt-0.5"
-                      aria-hidden="true"
-                    />
-                    <div className="space-y-0.5">
-                      <p className="text-sm font-semibold text-emerald-950">
-                        {justVotedMessage ?? 'Voto ya registrado en esta categoría'}
-                      </p>
-                      <p className="text-xs text-emerald-800">
-                        Tu elección: <strong>{votedNominee?.name ?? 'Registrada'}</strong>. Solo se permite un voto por categoría.
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {errorMsg && (
-                  <div
-                    role="alert"
-                    className="rounded-xl bg-rose-50 border border-rose-200 px-4 py-3 text-sm text-rose-800 font-medium"
-                  >
-                    {errorMsg}
-                  </div>
-                )}
-
-                {/* Nominee Tap Cards */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {activeCategory.nominees.map((nominee) => {
-                    const isMyChoice = votedNomineeId === nominee.id;
-                    const isPendingChoice = pendingNomineeId === nominee.id;
-                    const disabled = !canVoteNow;
-
-                    return (
-                      <button
-                        key={nominee.id}
-                        type="button"
-                        disabled={disabled}
-                        onClick={() => {
-                          if (!canVoteNow) return;
-                          setPendingNomineeId(nominee.id);
-                          setErrorMsg(null);
-                        }}
-                        className={`w-full min-h-[72px] text-left rounded-2xl p-4 sm:p-5 border transition-all flex items-center justify-between gap-4 ${
-                          isMyChoice
-                            ? 'bg-emerald-50/70 border-emerald-500 ring-1 ring-emerald-500'
-                            : isPendingChoice
-                            ? 'bg-amber-50/70 border-amber-700 ring-1 ring-amber-700'
-                            : disabled
-                            ? 'bg-white/70 border-stone-200 opacity-75 cursor-not-allowed'
-                            : 'bg-white border-stone-200 hover:border-stone-400 active:scale-[0.99]'
-                        }`}
-                      >
-                        <div className="flex items-start gap-3.5 min-w-0">
-                          <span
-                            className="w-3 h-10 rounded-full shrink-0 mt-0.5"
-                            style={{ backgroundColor: nominee.accentColor || '#D97706' }}
-                            aria-hidden="true"
-                          />
-                          <div className="min-w-0">
-                            <p className="font-display text-lg font-semibold text-slate-900 leading-snug">
-                              {nominee.name}
-                            </p>
-                            {nominee.subtitle && (
-                              <p className="text-xs sm:text-sm text-slate-600 mt-0.5 leading-relaxed">
-                                {nominee.subtitle}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-
-                        <div
-                          className={`w-7 h-7 rounded-full border flex items-center justify-center shrink-0 transition-colors ${
-                            isMyChoice
-                              ? 'bg-emerald-600 border-emerald-600 text-white'
-                              : isPendingChoice
-                              ? 'bg-amber-700 border-amber-700 text-white'
-                              : 'border-stone-300 bg-white'
-                          }`}
-                          aria-hidden="true"
+                  {/* Winner Announced Banner */}
+                  <AnimatePresence>
+                    {state.stageMode === 'winner' &&
+                      activeCategory.isWinnerRevealed &&
+                      activeWinners.length > 0 && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 8, scale: 0.98 }}
+                          animate={{ opacity: 1, y: 0, scale: 1 }}
+                          exit={{ opacity: 0, y: -6 }}
+                          transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+                          className="rounded-2xl bg-amber-50 border border-amber-300 p-5 flex items-center gap-4"
                         >
-                          {(isMyChoice || isPendingChoice) && <Check className="w-4 h-4" />}
+                          <div className="w-11 h-11 rounded-xl bg-amber-700 text-white flex items-center justify-center shrink-0">
+                            <Award className="w-6 h-6" aria-hidden="true" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs font-medium text-amber-800">
+                              {activeWinners.length > 1 ? 'Empate ganador' : 'Ganador anunciado'}
+                            </p>
+                            <p className="font-display text-xl font-semibold text-slate-900 truncate">
+                              {activeWinners.map((w) => w.name).join(' & ')}
+                            </p>
+                          </div>
+                        </motion.div>
+                      )}
+                  </AnimatePresence>
+
+                  {/* Locked confirmation when user already voted in this category */}
+                  <AnimatePresence>
+                    {hasVotedInActive && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -6 }}
+                        transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                        className="rounded-2xl bg-emerald-50 border border-emerald-200 p-4 sm:p-5 flex items-start gap-3"
+                      >
+                        <CheckCircle2
+                          className="w-5 h-5 text-emerald-700 shrink-0 mt-0.5"
+                          aria-hidden="true"
+                        />
+                        <div className="space-y-0.5">
+                          <p className="text-sm font-semibold text-emerald-950">
+                            {justVotedMessage ?? 'Voto ya registrado en esta categoría'}
+                          </p>
+                          <p className="text-xs text-emerald-800">
+                            Tu elección: <strong>{votedNominee?.name ?? 'Registrada'}</strong>. Solo se permite un voto por categoría.
+                          </p>
                         </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </section>
-            )}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  {errorMsg && (
+                    <div
+                      role="alert"
+                      className="rounded-xl bg-rose-50 border border-rose-200 px-4 py-3 text-sm text-rose-800 font-medium"
+                    >
+                      {errorMsg}
+                    </div>
+                  )}
+
+                  {/* Nominee Tap Cards */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {activeCategory.nominees.map((nominee, idx) => {
+                      const isMyChoice = votedNomineeId === nominee.id;
+                      const isPendingChoice = pendingNomineeId === nominee.id;
+                      const disabled = !canVoteNow;
+
+                      return (
+                        <motion.button
+                          key={nominee.id}
+                          type="button"
+                          disabled={disabled}
+                          initial={{ opacity: 0, y: 8 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{
+                            duration: 0.22,
+                            delay: Math.min(idx * 0.04, 0.24),
+                            ease: [0.22, 1, 0.36, 1],
+                          }}
+                          onClick={() => {
+                            if (!canVoteNow) return;
+                            setPendingNomineeId(nominee.id);
+                            setErrorMsg(null);
+                          }}
+                          className={`w-full min-h-[72px] text-left rounded-2xl p-4 sm:p-5 border transition-colors flex items-center justify-between gap-4 ${
+                            isMyChoice
+                              ? 'bg-emerald-50/70 border-emerald-500 ring-1 ring-emerald-500'
+                              : isPendingChoice
+                              ? 'bg-amber-50/70 border-amber-700 ring-1 ring-amber-700'
+                              : disabled
+                              ? 'bg-white/70 border-stone-200 opacity-75 cursor-not-allowed'
+                              : 'bg-white border-stone-200 hover:border-stone-400 active:scale-[0.99]'
+                          }`}
+                        >
+                          <div className="flex items-start gap-3.5 min-w-0">
+                            <span
+                              className="w-3 h-10 rounded-full shrink-0 mt-0.5"
+                              style={{ backgroundColor: nominee.accentColor || '#D97706' }}
+                              aria-hidden="true"
+                            />
+                            <div className="min-w-0">
+                              <p className="font-display text-lg font-semibold text-slate-900 leading-snug">
+                                {nominee.name}
+                              </p>
+                              {nominee.subtitle && (
+                                <p className="text-xs sm:text-sm text-slate-600 mt-0.5 leading-relaxed">
+                                  {nominee.subtitle}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          <div
+                            className={`w-7 h-7 rounded-full border flex items-center justify-center shrink-0 transition-colors ${
+                              isMyChoice
+                                ? 'bg-emerald-600 border-emerald-600 text-white'
+                                : isPendingChoice
+                                ? 'bg-amber-700 border-amber-700 text-white'
+                                : 'border-stone-300 bg-white'
+                            }`}
+                            aria-hidden="true"
+                          >
+                            {(isMyChoice || isPendingChoice) && <Check className="w-4 h-4" />}
+                          </div>
+                        </motion.button>
+                      );
+                    })}
+                  </div>
+                </motion.section>
+              )}
+            </AnimatePresence>
           </div>
         )}
       </main>
@@ -572,29 +538,35 @@ export default function VoterView({
         </footer>
       )}
 
-      {/* Thumb-Zone Sticky Bottom Vote CTA (only when voter selected a nominee to confirm) */}
-      {isRegistered && canVoteNow && (
-        <div
-          className={`${
-            isPreview ? 'sticky' : 'fixed'
-          } bottom-0 left-0 right-0 z-30 p-4 bg-gradient-to-t from-[#FAF9F6] via-[#FAF9F6] to-[#FAF9F6]/80 border-t border-stone-200/80`}
-        >
-          <div className="max-w-4xl mx-auto">
-            <button
-              type="button"
-              disabled={!pendingNominee || submitting}
-              onClick={handleConfirmVote}
-              className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 active:scale-[0.98] transition-all disabled:bg-stone-300 disabled:text-stone-600 disabled:cursor-not-allowed"
-            >
-              {submitting
-                ? 'Enviando voto...'
-                : pendingNominee
-                ? `Confirmar voto por ${pendingNominee.name}`
-                : 'Selecciona un nominado para votar'}
-            </button>
-          </div>
-        </div>
-      )}
+      {/* Thumb-Zone Sticky Bottom Vote CTA */}
+      <AnimatePresence>
+        {isRegistered && canVoteNow && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+            className={`${
+              isPreview ? 'sticky' : 'fixed'
+            } bottom-0 left-0 right-0 z-30 p-4 bg-gradient-to-t from-[#FAF9F6] via-[#FAF9F6] to-[#FAF9F6]/80 border-t border-stone-200/80`}
+          >
+            <div className="max-w-4xl mx-auto">
+              <button
+                type="button"
+                disabled={!pendingNominee || submitting}
+                onClick={handleConfirmVote}
+                className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 active:scale-[0.98] transition-all disabled:bg-stone-300 disabled:text-stone-600 disabled:cursor-not-allowed"
+              >
+                {submitting
+                  ? 'Enviando voto...'
+                  : pendingNominee
+                  ? `Confirmar voto por ${pendingNominee.name}`
+                  : 'Selecciona un nominado para votar'}
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

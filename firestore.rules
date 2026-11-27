@@ -1,0 +1,168 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isBootstrappedAdmin() {
+      return isSignedIn() &&
+        request.auth.token.email == 'carloschavezh@outlook.com' &&
+        request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isSignedIn() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidStageMode(mode) {
+      return mode in ['lobby', 'category', 'closed', 'winner', 'summary'];
+    }
+
+    function isValidCeremony(data) {
+      return data.keys().hasAll(['ceremonyTitle', 'ceremonySubtitle', 'stageMode', 'updatedAt']) &&
+        data.keys().hasOnly(['ceremonyTitle', 'ceremonySubtitle', 'stageMode', 'activeCategoryId', 'updatedAt']) &&
+        data.ceremonyTitle is string && data.ceremonyTitle.size() >= 1 && data.ceremonyTitle.size() <= 80 &&
+        data.ceremonySubtitle is string && data.ceremonySubtitle.size() <= 140 &&
+        isValidStageMode(data.stageMode) &&
+        (!('activeCategoryId' in data) || data.activeCategoryId == null || isValidId(data.activeCategoryId)) &&
+        data.updatedAt == request.time;
+    }
+
+    function isValidCategory(data) {
+      return data.keys().hasAll(['title', 'description', 'order', 'isVotingOpen', 'isWinnerRevealed', 'nominees', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['title', 'description', 'order', 'isVotingOpen', 'isWinnerRevealed', 'nominees', 'createdAt', 'updatedAt']) &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 80 &&
+        data.description is string && data.description.size() <= 220 &&
+        data.order is int && data.order >= 0 && data.order <= 1000 &&
+        data.isVotingOpen is bool &&
+        data.isWinnerRevealed is bool &&
+        data.nominees is list && data.nominees.size() >= 2 && data.nominees.size() <= 20 &&
+        data.nominees[0] is map &&
+        data.nominees[0].name is string && data.nominees[0].name.size() >= 1 && data.nominees[0].name.size() <= 60 &&
+        data.createdAt is timestamp &&
+        data.updatedAt == request.time;
+    }
+
+    function isValidResult(data, categoryId) {
+      return data.keys().hasAll(['categoryId', 'categoryTitle', 'isRevealed', 'totalVotes', 'breakdown', 'updatedAt']) &&
+        data.keys().hasOnly(['categoryId', 'categoryTitle', 'isRevealed', 'totalVotes', 'breakdown', 'updatedAt']) &&
+        data.categoryId == categoryId &&
+        isValidId(data.categoryId) &&
+        data.categoryTitle is string && data.categoryTitle.size() >= 1 && data.categoryTitle.size() <= 80 &&
+        data.isRevealed is bool &&
+        data.totalVotes is int && data.totalVotes >= 0 &&
+        data.breakdown is list && data.breakdown.size() >= 2 && data.breakdown.size() <= 20 &&
+        data.breakdown[0] is map &&
+        data.updatedAt == request.time;
+    }
+
+    function isValidVoter(data, voterId) {
+      return data.keys().hasAll(['voterId', 'voterName', 'joinedAt']) &&
+        data.keys().hasOnly(['voterId', 'voterName', 'joinedAt']) &&
+        data.voterId == voterId &&
+        isValidId(data.voterId) &&
+        data.voterName is string && data.voterName.size() >= 2 && data.voterName.size() <= 50 &&
+        data.joinedAt is timestamp;
+    }
+
+    function isValidVote(data, voteId) {
+      return data.keys().hasAll(['categoryId', 'nomineeId', 'voterId', 'voterName', 'createdAt']) &&
+        data.keys().hasOnly(['categoryId', 'nomineeId', 'voterId', 'voterName', 'createdAt']) &&
+        isValidId(data.categoryId) &&
+        isValidId(data.nomineeId) &&
+        isValidId(data.voterId) &&
+        voteId == data.categoryId + '__' + data.voterId &&
+        data.voterName is string && data.voterName.size() >= 2 && data.voterName.size() <= 50 &&
+        data.createdAt == request.time;
+    }
+
+    // Singleton ceremony control document ('main')
+    match /ceremony/{docId} {
+      allow get: if isValidId(docId) && docId == 'main';
+      allow list: if false;
+      allow create: if isAdmin() && docId == 'main' && isValidCeremony(incoming());
+      allow update: if isAdmin() && docId == 'main' && isValidCeremony(incoming()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['ceremonyTitle', 'ceremonySubtitle', 'stageMode', 'activeCategoryId', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // Categories: single active category fetched by exact ID; only admin lists all and mutates
+    match /categories/{categoryId} {
+      allow get: if isValidId(categoryId);
+      allow list: if isBootstrappedAdmin() || resource.data.isWinnerRevealed == true;
+      allow create: if isAdmin() && isValidId(categoryId) && isValidCategory(incoming()) && incoming().createdAt == request.time;
+      allow update: if isAdmin() && isValidId(categoryId) && isValidCategory(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'order', 'isVotingOpen', 'isWinnerRevealed', 'nominees', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(categoryId);
+    }
+
+    // Published results: readable only once revealed by admin (or by admin at any time)
+    match /results/{categoryId} {
+      allow get: if isValidId(categoryId) && (isAdmin() || resource.data.isRevealed == true);
+      allow list: if isBootstrappedAdmin() || resource.data.isRevealed == true;
+      allow create: if isAdmin() && isValidId(categoryId) && isValidResult(incoming(), categoryId);
+      allow update: if isAdmin() && isValidId(categoryId) && isValidResult(incoming(), categoryId) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['categoryTitle', 'isRevealed', 'totalVotes', 'breakdown', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(categoryId);
+    }
+
+    // Voters: device-scoped lookup by exact ID; only admin can list all participants
+    match /voters/{voterId} {
+      allow get: if isValidId(voterId);
+      allow list: if isBootstrappedAdmin();
+      allow create: if isValidId(voterId) && isValidVoter(incoming(), voterId) && incoming().joinedAt == request.time;
+      allow update: if isValidId(voterId) && isValidVoter(incoming(), voterId) &&
+        incoming().joinedAt == existing().joinedAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['voterName']);
+      allow delete: if isAdmin() && isValidId(voterId);
+    }
+
+    // Votes: strict 1 vote per category per voter via composite ID categoryId__voterId
+    match /votes/{voteId} {
+      allow get: if isValidId(voteId);
+      allow list: if isBootstrappedAdmin();
+      allow create: if isValidId(voteId) &&
+        isValidVote(incoming(), voteId) &&
+        exists(/databases/$(database)/documents/voters/$(incoming().voterId)) &&
+        exists(/databases/$(database)/documents/categories/$(incoming().categoryId)) &&
+        get(/databases/$(database)/documents/categories/$(incoming().categoryId)).data.isVotingOpen == true;
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(voteId);
+    }
+
+    // Admin UID registry
+    match /admins/{adminUid} {
+      allow get: if isSignedIn() && request.auth.uid == adminUid;
+      allow list: if false;
+      allow create, update, delete: if false;
+    }
+
+    // Connection test doc
+    match /test/{docId} {
+      allow get: if docId == 'connection';
+      allow list, write: if false;
+    }
+  }
+}

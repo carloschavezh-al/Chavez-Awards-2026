@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   ArrowDown,
@@ -6,30 +7,31 @@ import {
   Check,
   Copy,
   ExternalLink,
-  Eye,
-  EyeOff,
   Lock,
   LogOut,
   Monitor,
   Plus,
   RotateCcw,
+  ShieldCheck,
   Smartphone,
   Trash2,
   Unlock,
 } from 'lucide-react';
-import { checkBackendAvailable, useCeremonySocket } from '../hooks/useCeremonySocket';
+import { auth, googleProvider } from '../lib/firebase';
 import {
-  getLocalAdminState,
-  localAdminAuth,
-  localAdminMutate,
-  localAdminStatus,
-} from '../lib/localFallback';
-import {
-  buildViewUrl,
-  getConfiguredBackendUrl,
-  resolveApiUrl,
-  setConfiguredBackendUrl,
-} from '../lib/routes';
+  AUTHORIZED_ADMIN_EMAIL,
+  checkIsAuthorizedAdmin,
+  createCategoryInFirestore,
+  deleteCategoryInFirestore,
+  ensureInitialCeremonySeeded,
+  reorderCategoriesInFirestore,
+  resetVotesInFirestore,
+  setBulkVotingInFirestore,
+  subscribeAdminFirestore,
+  updateCategoryInFirestore,
+  updateCeremonyInFirestore,
+} from '../lib/firestoreCeremony';
+import { buildViewUrl } from '../lib/routes';
 import type { AdminCategoryState, AdminCeremonyState, PublicCeremonyState, StageMode } from '../types';
 import PublicScreenView from './PublicScreenView';
 import ReportsView from './ReportsView';
@@ -50,22 +52,37 @@ function derivePublicState(
   admin: AdminCeremonyState,
   audience: 'screen' | 'voter'
 ): PublicCeremonyState {
+  const activeCat =
+    admin.categories.find((c) => c.id === admin.activeCategoryId) ??
+    admin.categories[0] ??
+    null;
+
+  let visibleCategories: AdminCategoryState[] = [];
+  if (audience === 'screen' && admin.stageMode === 'summary') {
+    visibleCategories = admin.categories.filter((c) => c.isWinnerRevealed);
+  } else if (audience === 'voter') {
+    if (admin.stageMode !== 'lobby' && admin.stageMode !== 'summary' && activeCat) {
+      visibleCategories = [activeCat];
+    }
+  } else if (activeCat) {
+    visibleCategories = [activeCat];
+  }
+
   return {
     ceremonyTitle: admin.ceremonyTitle,
     ceremonySubtitle: admin.ceremonySubtitle,
     stageMode: admin.stageMode,
     activeCategoryId: admin.activeCategoryId,
-    showLiveTalliesOnScreen: admin.showLiveTalliesOnScreen,
+    showLiveTalliesOnScreen: false,
     connectedVotersCount: admin.connectedVotersCount,
     registeredVotersCount: admin.registeredVotersCount,
     totalVotesCast: admin.totalVotesCast,
     updatedAt: admin.updatedAt,
-    categories: admin.categories.map((cat) => {
+    categories: visibleCategories.map((cat) => {
       const shouldReveal =
         cat.isWinnerRevealed ||
         (audience === 'screen' &&
-          (admin.showLiveTalliesOnScreen ||
-            (admin.stageMode === 'winner' && admin.activeCategoryId === cat.id) ||
+          ((admin.stageMode === 'winner' && activeCat?.id === cat.id) ||
             admin.stageMode === 'summary'));
       return {
         id: cat.id,
@@ -74,7 +91,7 @@ function derivePublicState(
         order: cat.order,
         isVotingOpen: cat.isVotingOpen,
         isWinnerRevealed: cat.isWinnerRevealed,
-        totalVotes: cat.totalVotes,
+        totalVotes: shouldReveal ? cat.totalVotes : 0,
         nominees: cat.nominees.map((nom) => ({
           ...nom,
           votes: shouldReveal ? nom.votes : null,
@@ -87,12 +104,13 @@ function derivePublicState(
 
 export default function AdminConsole() {
   const [authStatusLoading, setAuthStatusLoading] = useState(true);
-  const [setupRequired, setSetupRequired] = useState(false);
-  const [adminToken, setAdminToken] = useState<string | null>(null);
-  const [passcodeInput, setPasscodeInput] = useState('');
-  const [confirmPasscodeInput, setConfirmPasscodeInput] = useState('');
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAuthorizedAdmin, setIsAuthorizedAdmin] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authSubmitting, setAuthSubmitting] = useState(false);
+
+  const [adminState, setAdminState] = useState<AdminCeremonyState | null>(null);
+  const [connected, setConnected] = useState(false);
 
   const [activeTab, setActiveTab] = useState<AdminTab>('live');
   const [copiedKey, setCopiedKey] = useState<'vote' | 'screen' | null>(null);
@@ -118,53 +136,94 @@ export default function AdminConsole() {
     onConfirm: () => Promise<void>;
   } | null>(null);
 
-  const [backendOfflineMode, setBackendOfflineMode] = useState(false);
-  const [backendUrlDraft, setBackendUrlDraft] = useState(() => getConfiguredBackendUrl());
-
-  const { state: adminState, connected, isStaticFallback, setState: setAdminState } = useCeremonySocket<AdminCeremonyState>({
-    role: 'admin',
-    adminToken,
-    enabled: Boolean(adminToken),
-  });
-
-  const effectiveStaticMode = backendOfflineMode || isStaticFallback;
-
+  // Listen to Firebase Auth state
   useEffect(() => {
-    let cancelled = false;
-    const checkStatus = async () => {
-      try {
-        const hasBackend = await checkBackendAvailable();
-        if (!hasBackend) {
-          if (!cancelled) {
-            setBackendOfflineMode(true);
-            setSetupRequired(localAdminStatus().setupRequired);
-          }
-          return;
-        }
-        const res = await fetch(resolveApiUrl('/api/admin/status'));
-        const ct = res.headers.get('content-type') || '';
-        if (res.ok && ct.includes('application/json') && !cancelled) {
-          const data = (await res.json()) as {
-            setupRequired: boolean;
-            authenticated: boolean;
-          };
-          setBackendOfflineMode(false);
-          setSetupRequired(data.setupRequired);
-        }
-      } catch {
-        if (!cancelled) {
-          setBackendOfflineMode(true);
-          setSetupRequired(localAdminStatus().setupRequired);
-        }
-      } finally {
-        if (!cancelled) setAuthStatusLoading(false);
+    let active = true;
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (!active) return;
+      if (!user) {
+        setCurrentUser(null);
+        setIsAuthorizedAdmin(false);
+        setAdminState(null);
+        setConnected(false);
+        setAuthStatusLoading(false);
+        return;
       }
-    };
-    checkStatus();
+
+      setCurrentUser(user);
+      const authorized = await checkIsAuthorizedAdmin(
+        user.uid,
+        user.email,
+        user.emailVerified
+      );
+      if (!active) return;
+
+      if (authorized) {
+        setIsAuthorizedAdmin(true);
+        setAuthError(null);
+      } else {
+        setIsAuthorizedAdmin(false);
+        setAdminState(null);
+        setConnected(false);
+        setAuthError(
+          `La cuenta ${user.email || 'seleccionada'} no tiene permisos de organizador. Inicia sesión con ${AUTHORIZED_ADMIN_EMAIL}.`
+        );
+      }
+      setAuthStatusLoading(false);
+    });
+
     return () => {
-      cancelled = true;
+      active = false;
+      unsubscribe();
     };
   }, []);
+
+  // Seed initial ceremony & subscribe to Firestore when authorized admin is logged in
+  useEffect(() => {
+    if (!currentUser || !isAuthorizedAdmin) return;
+    let cancelled = false;
+    let unsubscribeFirestore: (() => void) | null = null;
+
+    const initAdminStream = async () => {
+      try {
+        await ensureInitialCeremonySeeded();
+        if (cancelled) return;
+        unsubscribeFirestore = subscribeAdminFirestore(
+          (nextState) => {
+            if (!cancelled) {
+              setAdminState(nextState);
+              setConnected(true);
+            }
+          },
+          (err) => {
+            if (!cancelled) {
+              setConnected(false);
+              setActionError(
+                err instanceof Error
+                  ? `Error al sincronizar con Firebase: ${err.message}`
+                  : 'No se pudo sincronizar con la base de datos.'
+              );
+            }
+          }
+        );
+      } catch (err) {
+        if (!cancelled) {
+          setActionError(
+            err instanceof Error
+              ? err.message
+              : 'No se pudo inicializar la base de datos en Firebase.'
+          );
+        }
+      }
+    };
+
+    void initAdminStream();
+
+    return () => {
+      cancelled = true;
+      if (unsubscribeFirestore) unsubscribeFirestore();
+    };
+  }, [currentUser, isAuthorizedAdmin]);
 
   useEffect(() => {
     if (adminState) {
@@ -173,8 +232,8 @@ export default function AdminConsole() {
     }
   }, [adminState?.ceremonyTitle, adminState?.ceremonySubtitle]);
 
-  const voteUrl = useMemo(() => buildViewUrl('vote'), [backendOfflineMode]);
-  const screenUrl = useMemo(() => buildViewUrl('screen'), [backendOfflineMode]);
+  const voteUrl = useMemo(() => buildViewUrl('vote'), []);
+  const screenUrl = useMemo(() => buildViewUrl('screen'), []);
 
   const showToast = (msg: string) => {
     setActionFeedback(msg);
@@ -184,100 +243,49 @@ export default function AdminConsole() {
     }, 3000);
   };
 
-  const handleAuthSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleGoogleSignIn = async () => {
     setAuthError(null);
-    const clean = passcodeInput.trim();
-    if (clean.length < 4) {
-      setAuthError('Ingresa una clave de al menos 4 caracteres.');
-      return;
-    }
-    if (setupRequired && clean !== confirmPasscodeInput.trim()) {
-      setAuthError('Las claves no coinciden.');
-      return;
-    }
     setAuthSubmitting(true);
     try {
-      if (effectiveStaticMode) {
-        const result = localAdminAuth(setupRequired ? 'claim' : 'login', clean);
-        if (result.error || !result.token) {
-          setAuthError(result.error ?? 'No se pudo iniciar sesión.');
-          return;
-        }
-        setAdminToken(result.token);
-        setSetupRequired(false);
-        setAdminState(getLocalAdminState());
-        setPasscodeInput('');
-        setConfirmPasscodeInput('');
-        return;
+      await signInWithPopup(auth, googleProvider);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '';
+      if (message.includes('auth/popup-closed-by-user')) {
+        setAuthError('Se cerró la ventana de inicio de sesión antes de completar el acceso.');
+      } else if (message.includes('auth/unauthorized-domain')) {
+        setAuthError(
+          'Este dominio aún no está autorizado en Firebase Authentication. Agrégalo en Firebase Console → Authentication → Settings → Authorized domains.'
+        );
+      } else {
+        setAuthError('No se pudo iniciar sesión con Google. Intenta de nuevo.');
       }
-
-      const endpoint = setupRequired ? '/api/admin/claim' : '/api/admin/login';
-      const res = await fetch(resolveApiUrl(endpoint), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ passcode: clean }),
-      });
-      const data = (await res.json()) as { token?: string; error?: string };
-      if (!res.ok || !data.token) {
-        setAuthError(data.error ?? 'No se pudo iniciar sesión.');
-        return;
-      }
-      setAdminToken(data.token);
-      setSetupRequired(false);
-      setPasscodeInput('');
-      setConfirmPasscodeInput('');
-    } catch {
-      setAuthError('Error de conexión con el servidor.');
     } finally {
       setAuthSubmitting(false);
     }
   };
 
   const handleLogout = async () => {
-    if (adminToken && !effectiveStaticMode) {
-      await fetch(resolveApiUrl('/api/admin/logout'), {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${adminToken}` },
-      }).catch(() => {});
-    }
-    setAdminToken(null);
+    await signOut(auth).catch(() => {});
+    setCurrentUser(null);
+    setIsAuthorizedAdmin(false);
     setAdminState(null);
+    setConnected(false);
+    setAuthError(null);
   };
 
-  const adminFetch = async (url: string, options: RequestInit = {}) => {
-    if (!adminToken) return null;
+  const runAdminMutation = async (fn: () => Promise<unknown>): Promise<boolean> => {
     setActionError(null);
-
-    if (effectiveStaticMode) {
-      const method = (options.method || 'GET').toUpperCase();
-      const body =
-        typeof options.body === 'string'
-          ? (JSON.parse(options.body) as Record<string, unknown>)
-          : {};
-      const next = localAdminMutate(url, method, body);
-      setAdminState(next);
-      return next;
+    try {
+      await fn();
+      return true;
+    } catch (err) {
+      setActionError(
+        err instanceof Error
+          ? err.message
+          : 'Ocurrió un error al guardar los cambios en Firebase.'
+      );
+      return false;
     }
-
-    const res = await fetch(resolveApiUrl(url), {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${adminToken}`,
-        ...(options.headers ?? {}),
-      },
-    });
-    const data = (await res.json()) as AdminCeremonyState & { error?: string };
-    if (!res.ok) {
-      if (res.status === 401) {
-        setAdminToken(null);
-      }
-      setActionError(data.error ?? 'Ocurrió un error al guardar los cambios.');
-      return null;
-    }
-    setAdminState(data);
-    return data;
   };
 
   const updateCeremony = async (patch: {
@@ -285,20 +293,16 @@ export default function AdminConsole() {
     ceremonySubtitle?: string;
     stageMode?: StageMode;
     activeCategoryId?: string | null;
-    showLiveTalliesOnScreen?: boolean;
   }) => {
-    return adminFetch('/api/admin/ceremony', {
-      method: 'PUT',
-      body: JSON.stringify(patch),
-    });
+    if (!adminState) return false;
+    return runAdminMutation(() => updateCeremonyInFirestore(patch, adminState));
   };
 
   const toggleCategoryVoting = async (cat: AdminCategoryState) => {
-    const updated = await adminFetch(`/api/admin/categories/${cat.id}`, {
-      method: 'PUT',
-      body: JSON.stringify({ isVotingOpen: !cat.isVotingOpen }),
-    });
-    if (updated) {
+    const ok = await runAdminMutation(() =>
+      updateCategoryInFirestore(cat.id, { isVotingOpen: !cat.isVotingOpen })
+    );
+    if (ok) {
       showToast(
         !cat.isVotingOpen
           ? `Votación abierta: ${cat.title}`
@@ -308,11 +312,14 @@ export default function AdminConsole() {
   };
 
   const handleBulkVoting = async (action: 'open-all' | 'close-all') => {
-    const updated = await adminFetch('/api/admin/voting/bulk', {
-      method: 'POST',
-      body: JSON.stringify({ action }),
-    });
-    if (updated) {
+    if (!adminState) return;
+    const ok = await runAdminMutation(() =>
+      setBulkVotingInFirestore(
+        adminState.categories.map((c) => c.id),
+        action === 'open-all'
+      )
+    );
+    if (ok) {
       showToast(
         action === 'open-all'
           ? 'Todas las votaciones han sido abiertas'
@@ -347,6 +354,7 @@ export default function AdminConsole() {
 
   const saveCategoryEditor = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!adminState) return;
     const validNominees = nomineesDraft.filter((n) => n.name.trim().length > 0);
     if (!catTitleDraft.trim()) {
       setActionError('Escribe el nombre de la categoría.');
@@ -358,24 +366,31 @@ export default function AdminConsole() {
     }
     setSavingCategory(true);
     try {
-      const payload = {
-        title: catTitleDraft.trim(),
-        description: catDescDraft.trim(),
-        nominees: validNominees,
-      };
-      const res =
-        editingCategoryId === 'new'
-          ? await adminFetch('/api/admin/categories', {
-              method: 'POST',
-              body: JSON.stringify(payload),
-            })
-          : await adminFetch(`/api/admin/categories/${editingCategoryId}`, {
-              method: 'PUT',
-              body: JSON.stringify(payload),
-            });
-      if (res) {
+      const ok = await runAdminMutation(async () => {
+        if (editingCategoryId === 'new') {
+          const createdId = await createCategoryInFirestore({
+            title: catTitleDraft.trim(),
+            description: catDescDraft.trim(),
+            order: adminState.categories.length,
+            nominees: validNominees,
+          });
+          if (!adminState.activeCategoryId) {
+            await updateCeremonyInFirestore(
+              { activeCategoryId: createdId },
+              adminState
+            );
+          }
+        } else if (editingCategoryId) {
+          await updateCategoryInFirestore(editingCategoryId, {
+            title: catTitleDraft.trim(),
+            description: catDescDraft.trim(),
+            nominees: validNominees,
+          });
+        }
+      });
+      if (ok) {
         setEditingCategoryId(null);
-        showToast('Categoría guardada');
+        showToast('Categoría guardada en Firebase');
       }
     } finally {
       setSavingCategory(false);
@@ -389,10 +404,9 @@ export default function AdminConsole() {
     const ordered = [...adminState.categories];
     const [moved] = ordered.splice(index, 1);
     ordered.splice(targetIndex, 0, moved);
-    await adminFetch('/api/admin/categories/reorder', {
-      method: 'POST',
-      body: JSON.stringify({ orderedIds: ordered.map((c) => c.id) }),
-    });
+    await runAdminMutation(() =>
+      reorderCategoriesInFirestore(ordered.map((c) => c.id))
+    );
   };
 
   const copyToClipboard = async (text: string, key: 'vote' | 'screen') => {
@@ -414,8 +428,8 @@ export default function AdminConsole() {
     );
   }
 
-  // Organizer Login / First-run setup gate
-  if (!adminToken) {
+  // Organizer Google Sign-In Gate
+  if (!currentUser || !isAuthorizedAdmin) {
     return (
       <div className="min-h-screen bg-[#F8F9FA] text-slate-900 flex flex-col justify-between p-6">
         <header className="max-w-5xl w-full mx-auto flex items-center justify-between py-2">
@@ -432,78 +446,67 @@ export default function AdminConsole() {
 
         <main className="max-w-md w-full mx-auto bg-white border border-slate-200 rounded-2xl p-8 space-y-6 my-auto">
           <div className="space-y-2">
-            <p className="text-xs font-medium text-amber-700">
-              {setupRequired ? 'Configuración inicial del organizador' : 'Consola de Dirección'}
-            </p>
+            <div className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-800">
+              <ShieldCheck className="w-4 h-4" aria-hidden="true" />
+              <span>Consola de Dirección</span>
+            </div>
             <h1 className="font-display text-2xl sm:text-3xl font-semibold text-slate-900 text-balance">
-              {setupRequired
-                ? 'Crea tu clave de administrador'
-                : 'Acceso del organizador'}
+              Acceso del organizador
             </h1>
             <p className="text-sm text-slate-600 leading-relaxed">
-              {setupRequired
-                ? 'Esta clave protegerá la gestión de categorías, resultados y el control en vivo de la pantalla pública.'
-                : 'Ingresa tu clave de organizador para dirigir la premiación y ver los reportes en vivo.'}
+              Inicia sesión con tu cuenta autorizada de Google para crear categorías, dirigir la Pantalla Pública y guardar los votos en vivo en Firebase.
             </p>
           </div>
 
-          <form onSubmit={handleAuthSubmit} className="space-y-4">
-            <div className="space-y-1.5">
-              <label htmlFor="admin-passcode" className="block text-sm font-medium text-slate-800">
-                Clave de organizador
-              </label>
-              <input
-                id="admin-passcode"
-                type="password"
-                value={passcodeInput}
-                onChange={(e) => setPasscodeInput(e.target.value)}
-                placeholder="Mínimo 4 caracteres"
-                className="w-full min-h-[44px] px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-600/25 focus:border-amber-700"
-              />
-            </div>
-
-            {setupRequired && (
-              <div className="space-y-1.5">
-                <label
-                  htmlFor="admin-passcode-confirm"
-                  className="block text-sm font-medium text-slate-800"
-                >
-                  Confirmar clave
-                </label>
-                <input
-                  id="admin-passcode-confirm"
-                  type="password"
-                  value={confirmPasscodeInput}
-                  onChange={(e) => setConfirmPasscodeInput(e.target.value)}
-                  placeholder="Repite tu clave"
-                  className="w-full min-h-[44px] px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-600/25 focus:border-amber-700"
-                />
-              </div>
-            )}
-
-            {authError && (
-              <p role="alert" className="text-sm font-medium text-rose-700">
-                {authError}
-              </p>
-            )}
-
-            <button
-              type="submit"
-              disabled={authSubmitting}
-              className="w-full min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 transition-colors disabled:opacity-50"
+          {authError && (
+            <div
+              role="alert"
+              className="rounded-xl bg-rose-50 border border-rose-200 px-4 py-3 text-xs sm:text-sm font-medium text-rose-800 leading-relaxed"
             >
-              {authSubmitting
-                ? 'Verificando...'
-                : setupRequired
-                ? 'Guardar clave y entrar'
-                : 'Entrar al panel de control'}
-            </button>
-          </form>
+              {authError}
+            </div>
+          )}
 
-          <div className="pt-4 border-t border-slate-100 text-center">
+          <div className="space-y-3">
+            <button
+              type="button"
+              onClick={handleGoogleSignIn}
+              disabled={authSubmitting}
+              className="w-full min-h-[46px] px-4 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 transition-colors disabled:opacity-50 inline-flex items-center justify-center gap-2.5"
+            >
+              <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="#EA4335"
+                  d="M12 10.2v3.9h5.5c-.2 1.3-1.5 3.9-5.5 3.9-3.3 0-6-2.7-6-6s2.7-6 6-6c1.9 0 3.1.8 3.8 1.5l2.6-2.5C16.8 3.5 14.6 2.5 12 2.5 6.8 2.5 2.5 6.8 2.5 12s4.3 9.5 9.5 9.5c5.5 0 9.1-3.9 9.1-9.3 0-.6-.1-1.1-.2-1.6H12z"
+                />
+              </svg>
+              <span>
+                {authSubmitting
+                  ? 'Conectando con Google...'
+                  : currentUser && !isAuthorizedAdmin
+                  ? 'Cambiar de cuenta con Google'
+                  : 'Continuar con Google'}
+              </span>
+            </button>
+
+            {currentUser && !isAuthorizedAdmin && (
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="w-full min-h-[40px] px-4 py-2 rounded-xl border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
+              >
+                Cerrar sesión ({currentUser.email})
+              </button>
+            )}
+          </div>
+
+          <div className="pt-4 border-t border-slate-100 text-center space-y-2">
+            <p className="text-[11px] text-slate-500">
+              Cuenta autorizada: <span className="font-medium text-slate-700">{AUTHORIZED_ADMIN_EMAIL}</span>
+            </p>
             <a
               href={voteUrl}
-              className="text-xs font-medium text-slate-600 hover:text-slate-900 underline underline-offset-4"
+              className="block text-xs font-medium text-slate-600 hover:text-slate-900 underline underline-offset-4"
             >
               ¿Eres participante de la audiencia? Entra aquí para votar
             </a>
@@ -521,7 +524,7 @@ export default function AdminConsole() {
     return (
       <div className="min-h-screen bg-[#F8F9FA] flex flex-col items-center justify-center p-6 gap-3">
         <div className="w-9 h-9 rounded-full border-2 border-slate-300 border-t-slate-900 animate-spin" />
-        <p className="text-sm text-slate-600">Cargando consola de administración...</p>
+        <p className="text-sm text-slate-600">Cargando datos en vivo desde Firebase...</p>
       </div>
     );
   }
@@ -536,10 +539,10 @@ export default function AdminConsole() {
 
   const stageModes: Array<{ id: StageMode; label: string; hint: string }> = [
     { id: 'lobby', label: 'Bienvenida', hint: 'Muestra título y QR para unirse' },
-    { id: 'category', label: 'Presentar y votar', hint: 'Muestra nominados de la categoría activa' },
+    { id: 'category', label: 'Presentar y votar', hint: 'Muestra solo las opciones de la categoría activa' },
     { id: 'closed', label: 'Cerrar y suspenso', hint: 'Cierra votación antes de revelar' },
     { id: 'winner', label: 'Revelar ganador', hint: 'Anuncia al ganador con celebración' },
-    { id: 'summary', label: 'Cuadro de honor', hint: 'Resumen final de todos los ganadores' },
+    { id: 'summary', label: 'Cuadro de honor', hint: 'Resumen final de los ganadores revelados' },
   ];
 
   return (
@@ -600,19 +603,19 @@ export default function AdminConsole() {
               }`}
               aria-hidden="true"
             />
-            <span>{connected ? 'Sincronizado en vivo' : 'Reconectando'}</span>
+            <span>{connected ? 'Sincronizado con Firebase' : 'Conectando...'}</span>
           </span>
           <span aria-hidden="true" className="text-slate-300">
             ·
           </span>
           <span className="tabular-nums">
-            <strong className="text-slate-900">{adminState.connectedVotersCount}</strong> votantes conectados
+            <strong className="text-slate-900">{adminState.registeredVotersCount}</strong> votantes registrados
           </span>
           <span aria-hidden="true" className="text-slate-300">
             ·
           </span>
           <span className="tabular-nums">
-            <strong className="text-slate-900">{adminState.connectedScreensCount}</strong> pantallas públicas
+            <strong className="text-slate-900">{adminState.categories.length}</strong> categorías
           </span>
           <span aria-hidden="true" className="text-slate-300">
             ·
@@ -622,14 +625,19 @@ export default function AdminConsole() {
           </span>
         </div>
 
-        <button
-          type="button"
-          onClick={handleLogout}
-          className="inline-flex items-center gap-1.5 text-slate-600 hover:text-slate-900 font-medium whitespace-nowrap"
-        >
-          <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
-          <span>Cerrar sesión</span>
-        </button>
+        <div className="flex items-center gap-3">
+          {currentUser.email && (
+            <span className="hidden sm:inline text-slate-500">{currentUser.email}</span>
+          )}
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="inline-flex items-center gap-1.5 text-slate-600 hover:text-slate-900 font-medium whitespace-nowrap"
+          >
+            <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>Cerrar sesión</span>
+          </button>
+        </div>
       </div>
 
       {/* Feedback & Errors */}
@@ -653,46 +661,6 @@ export default function AdminConsole() {
 
       {/* Main Workspace */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-6 lg:px-8 py-8">
-        {effectiveStaticMode && (
-          <div className="mb-6 rounded-xl bg-amber-50 border border-amber-200 p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-            <div className="space-y-1">
-              <p className="text-sm font-semibold text-amber-950">
-                Modo navegador local (hosting estático sin servidor Node activo)
-              </p>
-              <p className="text-xs text-amber-900 leading-relaxed">
-                Puedes configurar categorías y probar Pantalla Pública y Votación en pestañas de este mismo dispositivo. Para recibir votos desde múltiples celulares por internet, conecta la URL de tu servidor Node (Render, Railway o Cloud Run).
-              </p>
-            </div>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                try {
-                  setConfiguredBackendUrl(backendUrlDraft);
-                  window.location.reload();
-                } catch (err) {
-                  setActionError(err instanceof Error ? err.message : 'URL inválida');
-                }
-              }}
-              className="flex items-center gap-2 shrink-0"
-            >
-              <input
-                type="url"
-                value={backendUrlDraft}
-                onChange={(e) => setBackendUrlDraft(e.target.value)}
-                placeholder="https://tu-servidor.onrender.com"
-                aria-label="URL del servidor en vivo"
-                className="min-h-[38px] w-56 px-3 py-1.5 rounded-lg border border-amber-300 bg-white text-xs text-slate-900"
-              />
-              <button
-                type="submit"
-                className="min-h-[38px] px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 whitespace-nowrap"
-              >
-                Conectar servidor
-              </button>
-            </form>
-          </div>
-        )}
-
         {activeTab === 'live' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
             {/* Left Conductor Column */}
@@ -705,7 +673,7 @@ export default function AdminConsole() {
                       Dirección de Pantalla Pública
                     </h1>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Controla en tiempo real lo que ven todos los asistentes en el proyector o TV.
+                      Controla en tiempo real lo que ven todos los asistentes y la única categoría visible para votar.
                     </p>
                   </div>
                 </div>
@@ -718,8 +686,8 @@ export default function AdminConsole() {
                         key={m.id}
                         type="button"
                         onClick={async () => {
-                          await updateCeremony({ stageMode: m.id });
-                          showToast(`Pantalla cambiada a: ${m.label}`);
+                          const ok = await updateCeremony({ stageMode: m.id });
+                          if (ok) showToast(`Pantalla cambiada a: ${m.label}`);
                         }}
                         className={`text-left p-3.5 rounded-xl border transition-colors ${
                           active
@@ -741,27 +709,9 @@ export default function AdminConsole() {
                 </div>
 
                 <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-4">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      updateCeremony({
-                        showLiveTalliesOnScreen: !adminState.showLiveTalliesOnScreen,
-                      })
-                    }
-                    className="min-h-[40px] px-3.5 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-medium text-slate-800 inline-flex items-center gap-2 transition-colors"
-                  >
-                    {adminState.showLiveTalliesOnScreen ? (
-                      <>
-                        <Eye className="w-4 h-4 text-emerald-700" aria-hidden="true" />
-                        <span>Barras en vivo visibles en pantalla pública</span>
-                      </>
-                    ) : (
-                      <>
-                        <EyeOff className="w-4 h-4 text-slate-500" aria-hidden="true" />
-                        <span>Barras ocultas (modo suspenso hasta revelar)</span>
-                      </>
-                    )}
-                  </button>
+                  <p className="text-xs text-slate-500">
+                    La Pantalla Pública solo muestra las opciones de votación hasta que reveles al ganador.
+                  </p>
 
                   <div className="flex items-center gap-2">
                     <button
@@ -790,7 +740,7 @@ export default function AdminConsole() {
                       Categorías y control de votación
                     </h2>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Selecciona la categoría en escenario y abre o cierra su votación al instante.
+                      Avanza categoría por categoría. Los votantes solo ven la que está activa en escenario.
                     </p>
                   </div>
                 </div>
@@ -837,15 +787,16 @@ export default function AdminConsole() {
                           <button
                             type="button"
                             onClick={async () => {
-                              await updateCeremony({
+                              const ok = await updateCeremony({
                                 activeCategoryId: cat.id,
                                 stageMode:
                                   adminState.stageMode === 'lobby' ||
-                                  adminState.stageMode === 'summary'
+                                  adminState.stageMode === 'summary' ||
+                                  adminState.stageMode === 'winner'
                                     ? 'category'
                                     : adminState.stageMode,
                               });
-                              showToast(`Categoría activa: ${cat.title}`);
+                              if (ok) showToast(`Categoría activa: ${cat.title}`);
                             }}
                             className={`min-h-[40px] px-3.5 py-2 rounded-lg text-xs font-semibold border transition-colors whitespace-nowrap ${
                               isActiveOnStage
@@ -923,7 +874,7 @@ export default function AdminConsole() {
                     Conexión de votantes (celulares)
                   </h2>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Comparte el enlace o proyecta el QR. Los invitados solo ven su panel de voto.
+                    Comparte el enlace o proyecta el QR. Los invitados solo ven la categoría activa para votar.
                   </p>
                 </div>
 
@@ -1007,7 +958,7 @@ export default function AdminConsole() {
                     Configuración de la Gala y Categorías
                   </h1>
                   <p className="text-sm text-slate-600 mt-0.5">
-                    Personaliza el nombre del evento, edita categorías y administra nominados.
+                    Personaliza el nombre del evento, agrega categorías y administra nominados en Firebase.
                   </p>
                 </div>
 
@@ -1020,11 +971,13 @@ export default function AdminConsole() {
                         'Se eliminarán todos los votos registrados en todas las categorías. Las categorías y nominados se mantendrán intactos.',
                       confirmLabel: 'Sí, reiniciar votos',
                       onConfirm: async () => {
-                        const res = await adminFetch('/api/admin/reset-votes', {
-                          method: 'POST',
-                          body: JSON.stringify({}),
-                        });
-                        if (res) showToast('Todos los votos han sido reiniciados');
+                        const ok = await runAdminMutation(() =>
+                          resetVotesInFirestore(
+                            null,
+                            adminState.categories.map((c) => c.id)
+                          )
+                        );
+                        if (ok) showToast('Todos los votos han sido reiniciados');
                       },
                     })
                   }
@@ -1038,11 +991,11 @@ export default function AdminConsole() {
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
-                  const res = await updateCeremony({
+                  const ok = await updateCeremony({
                     ceremonyTitle: titleDraft,
                     ceremonySubtitle: subtitleDraft,
                   });
-                  if (res) showToast('Información de la gala actualizada');
+                  if (ok) showToast('Información de la gala actualizada');
                 }}
                 className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end pt-3 border-t border-slate-100"
               >
@@ -1330,11 +1283,13 @@ export default function AdminConsole() {
                                 'Se eliminarán únicamente los votos de esta categoría para poder volver a votarla.',
                               confirmLabel: 'Reiniciar categoría',
                               onConfirm: async () => {
-                                const res = await adminFetch('/api/admin/reset-votes', {
-                                  method: 'POST',
-                                  body: JSON.stringify({ categoryId: cat.id }),
-                                });
-                                if (res) showToast(`Votos reiniciados en ${cat.title}`);
+                                const ok = await runAdminMutation(() =>
+                                  resetVotesInFirestore(
+                                    cat.id,
+                                    adminState.categories.map((c) => c.id)
+                                  )
+                                );
+                                if (ok) showToast(`Votos reiniciados en ${cat.title}`);
                               },
                             })
                           }
@@ -1351,10 +1306,17 @@ export default function AdminConsole() {
                                 'Esta acción eliminará la categoría, sus nominados y todos los votos recibidos en ella.',
                               confirmLabel: 'Eliminar categoría',
                               onConfirm: async () => {
-                                const res = await adminFetch(`/api/admin/categories/${cat.id}`, {
-                                  method: 'DELETE',
-                                });
-                                if (res) showToast(`Categoría eliminada: ${cat.title}`);
+                                const remaining = adminState.categories.filter(
+                                  (c) => c.id !== cat.id
+                                );
+                                const nextActiveId =
+                                  adminState.activeCategoryId === cat.id
+                                    ? remaining[0]?.id ?? null
+                                    : adminState.activeCategoryId;
+                                const ok = await runAdminMutation(() =>
+                                  deleteCategoryInFirestore(cat.id, nextActiveId)
+                                );
+                                if (ok) showToast(`Categoría eliminada: ${cat.title}`);
                               },
                             })
                           }
@@ -1423,7 +1385,7 @@ export default function AdminConsole() {
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <h2 className="text-sm font-semibold text-slate-900">
-                      Pantalla Pública (/pantalla)
+                      Pantalla Pública
                     </h2>
                     <p className="text-xs text-slate-500">
                       Vista exclusiva para proyector o televisor
@@ -1474,7 +1436,6 @@ export default function AdminConsole() {
                     state={voterPreviewState}
                     connected={connected}
                     isPreview
-                    isStaticFallback={effectiveStaticMode}
                   />
                 </div>
               </div>

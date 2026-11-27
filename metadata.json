@@ -1,0 +1,6 @@
+{
+  "name": "Gala Familiar · Premiación en Vivo",
+  "description": "Plataforma de premiación familiar en tiempo real con consola de administrador, pantalla pública de presentación y panel de votación móvil por categorías.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

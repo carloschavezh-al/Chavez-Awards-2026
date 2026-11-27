@@ -1,11 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Award, Check, CheckCircle2, Lock, Trophy, UserCheck } from 'lucide-react';
+import {
+  castLocalVote,
+  getLocalVoterSession,
+  registerLocalVoter,
+} from '../lib/localFallback';
+import { resolveApiUrl } from '../lib/routes';
 import type { PublicCategoryState, PublicCeremonyState, VoterVoteMap } from '../types';
 
 interface VoterViewProps {
   state: PublicCeremonyState | null;
   connected?: boolean;
   isPreview?: boolean;
+  isStaticFallback?: boolean;
 }
 
 const VOTER_TOKEN_STORAGE_KEY = 'gala_familiar_voter_token';
@@ -22,6 +29,7 @@ export default function VoterView({
   state,
   connected = true,
   isPreview = false,
+  isStaticFallback = false,
 }: VoterViewProps) {
   const [voterToken, setVoterToken] = useState<string | null>(() => {
     try {
@@ -46,13 +54,26 @@ export default function VoterView({
   useEffect(() => {
     let cancelled = false;
     const loadSession = async () => {
+      if (isStaticFallback) {
+        const local = getLocalVoterSession();
+        if (!cancelled && local.registered && local.voterToken) {
+          setIsRegistered(true);
+          setVoterName(local.voterName ?? 'Invitado');
+          setVoterToken(local.voterToken);
+          setMyVotes(local.myVotes ?? {});
+        }
+        if (!cancelled) setCheckingSession(false);
+        return;
+      }
+
       try {
         const headers: Record<string, string> = {};
         if (voterToken) {
           headers['x-voter-token'] = voterToken;
         }
-        const res = await fetch('/api/voter/session', { headers });
-        if (!res.ok) return;
+        const res = await fetch(resolveApiUrl('/api/voter/session'), { headers });
+        const ct = res.headers.get('content-type') || '';
+        if (!res.ok || !ct.includes('application/json')) return;
         const data = (await res.json()) as {
           registered: boolean;
           voterName?: string;
@@ -80,7 +101,7 @@ export default function VoterView({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isStaticFallback]);
 
   // Follow the presenter's active category automatically when stage updates
   useEffect(() => {
@@ -114,9 +135,18 @@ export default function VoterView({
     setSubmitting(true);
     setErrorMsg(null);
     try {
+      if (isStaticFallback) {
+        const local = registerLocalVoter(clean);
+        setVoterToken(local.voterToken);
+        setVoterName(local.voterName);
+        setMyVotes(local.myVotes);
+        setIsRegistered(true);
+        return;
+      }
+
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (voterToken) headers['x-voter-token'] = voterToken;
-      const res = await fetch('/api/voter/register', {
+      const res = await fetch(resolveApiUrl('/api/voter/register'), {
         method: 'POST',
         headers,
         body: JSON.stringify({ name: clean }),
@@ -155,10 +185,25 @@ export default function VoterView({
     setErrorMsg(null);
     setJustVotedMessage(null);
     try {
+      if (isStaticFallback) {
+        const local = castLocalVote(activeCategory.id, pendingNomineeId);
+        if (local.error) {
+          setErrorMsg(local.error);
+          return;
+        }
+        if (local.myVotes) setMyVotes(local.myVotes);
+        const chosen = activeCategory.nominees.find((n) => n.id === pendingNomineeId);
+        setJustVotedMessage(
+          chosen ? `Voto registrado para ${chosen.name}` : 'Voto registrado correctamente'
+        );
+        setPendingNomineeId(null);
+        return;
+      }
+
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (voterToken) headers['x-voter-token'] = voterToken;
 
-      const res = await fetch('/api/vote', {
+      const res = await fetch(resolveApiUrl('/api/vote'), {
         method: 'POST',
         headers,
         body: JSON.stringify({

@@ -45,7 +45,7 @@ interface CeremonyStore {
   signingSecret: string;
 }
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const STORE_PATH = path.resolve(DATA_DIR, 'ceremony-store.json');
 const DIST_DIR = path.resolve(process.cwd(), 'dist');
@@ -503,6 +503,41 @@ function broadcastState(): void {
 async function startServer(): Promise<void> {
   const app = express();
   app.set('trust proxy', 1);
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin) {
+      let allowed = false;
+      try {
+        const parsed = new URL(origin);
+        const configured = (process.env.ALLOWED_ORIGIN || '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (
+          configured.includes(origin) ||
+          (parsed.protocol === 'https:' && parsed.hostname.endsWith('.github.io')) ||
+          parsed.hostname === 'localhost' ||
+          parsed.hostname === '127.0.0.1'
+        ) {
+          allowed = true;
+        }
+      } catch {
+        allowed = false;
+      }
+      if (allowed) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Vary', 'Origin');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-voter-token');
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+      }
+    }
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
   app.use(express.json({ limit: '1mb' }));
 
   const server = http.createServer(app);

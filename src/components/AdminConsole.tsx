@@ -17,7 +17,19 @@ import {
   Trash2,
   Unlock,
 } from 'lucide-react';
-import { useCeremonySocket } from '../hooks/useCeremonySocket';
+import { checkBackendAvailable, useCeremonySocket } from '../hooks/useCeremonySocket';
+import {
+  getLocalAdminState,
+  localAdminAuth,
+  localAdminMutate,
+  localAdminStatus,
+} from '../lib/localFallback';
+import {
+  buildViewUrl,
+  getConfiguredBackendUrl,
+  resolveApiUrl,
+  setConfiguredBackendUrl,
+} from '../lib/routes';
 import type { AdminCategoryState, AdminCeremonyState, PublicCeremonyState, StageMode } from '../types';
 import PublicScreenView from './PublicScreenView';
 import ReportsView from './ReportsView';
@@ -106,26 +118,44 @@ export default function AdminConsole() {
     onConfirm: () => Promise<void>;
   } | null>(null);
 
-  const { state: adminState, connected, setState: setAdminState } = useCeremonySocket<AdminCeremonyState>({
+  const [backendOfflineMode, setBackendOfflineMode] = useState(false);
+  const [backendUrlDraft, setBackendUrlDraft] = useState(() => getConfiguredBackendUrl());
+
+  const { state: adminState, connected, isStaticFallback, setState: setAdminState } = useCeremonySocket<AdminCeremonyState>({
     role: 'admin',
     adminToken,
     enabled: Boolean(adminToken),
   });
 
+  const effectiveStaticMode = backendOfflineMode || isStaticFallback;
+
   useEffect(() => {
     let cancelled = false;
     const checkStatus = async () => {
       try {
-        const res = await fetch('/api/admin/status');
-        if (res.ok && !cancelled) {
+        const hasBackend = await checkBackendAvailable();
+        if (!hasBackend) {
+          if (!cancelled) {
+            setBackendOfflineMode(true);
+            setSetupRequired(localAdminStatus().setupRequired);
+          }
+          return;
+        }
+        const res = await fetch(resolveApiUrl('/api/admin/status'));
+        const ct = res.headers.get('content-type') || '';
+        if (res.ok && ct.includes('application/json') && !cancelled) {
           const data = (await res.json()) as {
             setupRequired: boolean;
             authenticated: boolean;
           };
+          setBackendOfflineMode(false);
           setSetupRequired(data.setupRequired);
         }
       } catch {
-        // Ignore initial status error
+        if (!cancelled) {
+          setBackendOfflineMode(true);
+          setSetupRequired(localAdminStatus().setupRequired);
+        }
       } finally {
         if (!cancelled) setAuthStatusLoading(false);
       }
@@ -143,15 +173,8 @@ export default function AdminConsole() {
     }
   }, [adminState?.ceremonyTitle, adminState?.ceremonySubtitle]);
 
-  const voteUrl = useMemo(() => {
-    if (typeof window === 'undefined') return '/votar';
-    return `${window.location.origin}/votar`;
-  }, []);
-
-  const screenUrl = useMemo(() => {
-    if (typeof window === 'undefined') return '/pantalla';
-    return `${window.location.origin}/pantalla`;
-  }, []);
+  const voteUrl = useMemo(() => buildViewUrl('vote'), [backendOfflineMode]);
+  const screenUrl = useMemo(() => buildViewUrl('screen'), [backendOfflineMode]);
 
   const showToast = (msg: string) => {
     setActionFeedback(msg);
@@ -175,8 +198,22 @@ export default function AdminConsole() {
     }
     setAuthSubmitting(true);
     try {
+      if (effectiveStaticMode) {
+        const result = localAdminAuth(setupRequired ? 'claim' : 'login', clean);
+        if (result.error || !result.token) {
+          setAuthError(result.error ?? 'No se pudo iniciar sesión.');
+          return;
+        }
+        setAdminToken(result.token);
+        setSetupRequired(false);
+        setAdminState(getLocalAdminState());
+        setPasscodeInput('');
+        setConfirmPasscodeInput('');
+        return;
+      }
+
       const endpoint = setupRequired ? '/api/admin/claim' : '/api/admin/login';
-      const res = await fetch(endpoint, {
+      const res = await fetch(resolveApiUrl(endpoint), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ passcode: clean }),
@@ -198,8 +235,8 @@ export default function AdminConsole() {
   };
 
   const handleLogout = async () => {
-    if (adminToken) {
-      await fetch('/api/admin/logout', {
+    if (adminToken && !effectiveStaticMode) {
+      await fetch(resolveApiUrl('/api/admin/logout'), {
         method: 'POST',
         headers: { Authorization: `Bearer ${adminToken}` },
       }).catch(() => {});
@@ -211,7 +248,19 @@ export default function AdminConsole() {
   const adminFetch = async (url: string, options: RequestInit = {}) => {
     if (!adminToken) return null;
     setActionError(null);
-    const res = await fetch(url, {
+
+    if (effectiveStaticMode) {
+      const method = (options.method || 'GET').toUpperCase();
+      const body =
+        typeof options.body === 'string'
+          ? (JSON.parse(options.body) as Record<string, unknown>)
+          : {};
+      const next = localAdminMutate(url, method, body);
+      setAdminState(next);
+      return next;
+    }
+
+    const res = await fetch(resolveApiUrl(url), {
       ...options,
       headers: {
         'Content-Type': 'application/json',
@@ -374,7 +423,7 @@ export default function AdminConsole() {
             Gala Familiar
           </span>
           <a
-            href="/votar"
+            href={voteUrl}
             className="text-sm font-medium text-amber-800 hover:underline whitespace-nowrap"
           >
             Ir al panel de votación
@@ -453,7 +502,7 @@ export default function AdminConsole() {
 
           <div className="pt-4 border-t border-slate-100 text-center">
             <a
-              href="/votar"
+              href={voteUrl}
               className="text-xs font-medium text-slate-600 hover:text-slate-900 underline underline-offset-4"
             >
               ¿Eres participante de la audiencia? Entra aquí para votar
@@ -530,7 +579,7 @@ export default function AdminConsole() {
         {/* Zone 3: 1 primary CTA */}
         <div className="shrink-0">
           <a
-            href="/pantalla"
+            href={screenUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="min-h-[40px] px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 transition-colors inline-flex items-center gap-2 whitespace-nowrap shrink-0"
@@ -604,6 +653,46 @@ export default function AdminConsole() {
 
       {/* Main Workspace */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-6 lg:px-8 py-8">
+        {effectiveStaticMode && (
+          <div className="mb-6 rounded-xl bg-amber-50 border border-amber-200 p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <p className="text-sm font-semibold text-amber-950">
+                Modo navegador local (hosting estático sin servidor Node activo)
+              </p>
+              <p className="text-xs text-amber-900 leading-relaxed">
+                Puedes configurar categorías y probar Pantalla Pública y Votación en pestañas de este mismo dispositivo. Para recibir votos desde múltiples celulares por internet, conecta la URL de tu servidor Node (Render, Railway o Cloud Run).
+              </p>
+            </div>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                try {
+                  setConfiguredBackendUrl(backendUrlDraft);
+                  window.location.reload();
+                } catch (err) {
+                  setActionError(err instanceof Error ? err.message : 'URL inválida');
+                }
+              }}
+              className="flex items-center gap-2 shrink-0"
+            >
+              <input
+                type="url"
+                value={backendUrlDraft}
+                onChange={(e) => setBackendUrlDraft(e.target.value)}
+                placeholder="https://tu-servidor.onrender.com"
+                aria-label="URL del servidor en vivo"
+                className="min-h-[38px] w-56 px-3 py-1.5 rounded-lg border border-amber-300 bg-white text-xs text-slate-900"
+              />
+              <button
+                type="submit"
+                className="min-h-[38px] px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 whitespace-nowrap"
+              >
+                Conectar servidor
+              </button>
+            </form>
+          </div>
+        )}
+
         {activeTab === 'live' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
             {/* Left Conductor Column */}
@@ -810,7 +899,7 @@ export default function AdminConsole() {
                     </p>
                   </div>
                   <a
-                    href="/pantalla"
+                    href={screenUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-xs font-medium text-amber-800 hover:underline inline-flex items-center gap-1 whitespace-nowrap"
@@ -868,7 +957,7 @@ export default function AdminConsole() {
                         )}
                       </button>
                       <a
-                        href="/votar"
+                        href={voteUrl}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="min-h-[36px] px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 text-xs font-medium hover:bg-slate-50 inline-flex items-center gap-1.5"
@@ -1341,7 +1430,7 @@ export default function AdminConsole() {
                     </p>
                   </div>
                   <a
-                    href="/pantalla"
+                    href={screenUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="min-h-[36px] px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 inline-flex items-center gap-1.5"
@@ -1363,14 +1452,14 @@ export default function AdminConsole() {
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <h2 className="text-sm font-semibold text-slate-900">
-                      Panel de Votación (/votar)
+                      Panel de Votación
                     </h2>
                     <p className="text-xs text-slate-500">
                       Vista exclusiva de los participantes en sus celulares
                     </p>
                   </div>
                   <a
-                    href="/votar"
+                    href={voteUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="min-h-[36px] px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 inline-flex items-center gap-1.5"
@@ -1385,6 +1474,7 @@ export default function AdminConsole() {
                     state={voterPreviewState}
                     connected={connected}
                     isPreview
+                    isStaticFallback={effectiveStaticMode}
                   />
                 </div>
               </div>

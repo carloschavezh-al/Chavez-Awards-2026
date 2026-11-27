@@ -2,10 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import confetti from 'canvas-confetti';
 import { Award, CheckCircle2, Lock, Smartphone, Trophy, Users } from 'lucide-react';
+import STAGE_BACKDROP_SRC from '../assets/images/gala_stage_backdrop_1795747444467.jpg';
+import TROPHY_EMBLEM_SRC from '../assets/images/golden_trophy_emblem_1795747445110.jpg';
+import { buildViewUrl } from '../lib/routes';
 import type { PublicCategoryState, PublicCeremonyState } from '../types';
-
-const STAGE_BACKDROP_SRC = '/src/assets/images/gala_stage_backdrop_1795747444467.jpg';
-const TROPHY_EMBLEM_SRC = '/src/assets/images/golden_trophy_emblem_1795747445110.jpg';
 
 interface PublicScreenViewProps {
   state: PublicCeremonyState | null;
@@ -31,8 +31,7 @@ export default function PublicScreenView({
   const prevWinnerKeyRef = useRef<string | null>(null);
 
   const voteUrl = useMemo(() => {
-    if (typeof window === 'undefined') return 'https://ejemplo.com/votar';
-    return `${window.location.origin}/votar`;
+    return buildViewUrl('vote');
   }, []);
 
   const activeCategory = useMemo(() => {

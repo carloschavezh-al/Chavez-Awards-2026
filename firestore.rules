@@ -36,17 +36,24 @@ service cloud.firestore {
     }
 
     function isValidStageMode(mode) {
-      return mode in ['lobby', 'category', 'closed', 'winner', 'summary'];
+      return mode in ['lobby', 'nominees', 'category', 'closed', 'winner', 'summary'];
     }
 
     function isValidCeremony(data) {
       return data.keys().hasAll(['ceremonyTitle', 'ceremonySubtitle', 'stageMode', 'updatedAt']) &&
-        data.keys().hasOnly(['ceremonyTitle', 'ceremonySubtitle', 'stageMode', 'activeCategoryId', 'updatedAt']) &&
+        data.keys().hasOnly(['ceremonyTitle', 'ceremonySubtitle', 'stageMode', 'activeCategoryId', 'revealedNomineeIndex', 'updatedAt']) &&
         data.ceremonyTitle is string && data.ceremonyTitle.size() >= 1 && data.ceremonyTitle.size() <= 80 &&
         data.ceremonySubtitle is string && data.ceremonySubtitle.size() <= 140 &&
         isValidStageMode(data.stageMode) &&
         (!('activeCategoryId' in data) || data.activeCategoryId == null || isValidId(data.activeCategoryId)) &&
+        (!('revealedNomineeIndex' in data) || (data.revealedNomineeIndex is int && data.revealedNomineeIndex >= 0 && data.revealedNomineeIndex <= 20)) &&
         data.updatedAt == request.time;
+    }
+
+    function isValidNomineeItem(nom) {
+      return nom is map &&
+        nom.name is string && nom.name.size() >= 1 && nom.name.size() <= 60 &&
+        (!('photoUrl' in nom) || (nom.photoUrl is string && nom.photoUrl.size() <= 120000));
     }
 
     function isValidCategory(data) {
@@ -58,8 +65,8 @@ service cloud.firestore {
         data.isVotingOpen is bool &&
         data.isWinnerRevealed is bool &&
         data.nominees is list && data.nominees.size() >= 2 && data.nominees.size() <= 20 &&
-        data.nominees[0] is map &&
-        data.nominees[0].name is string && data.nominees[0].name.size() >= 1 && data.nominees[0].name.size() <= 60 &&
+        isValidNomineeItem(data.nominees[0]) &&
+        isValidNomineeItem(data.nominees[1]) &&
         data.createdAt is timestamp &&
         data.updatedAt == request.time;
     }
@@ -103,7 +110,7 @@ service cloud.firestore {
       allow list: if false;
       allow create: if isAdmin() && docId == 'main' && isValidCeremony(incoming());
       allow update: if isAdmin() && docId == 'main' && isValidCeremony(incoming()) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['ceremonyTitle', 'ceremonySubtitle', 'stageMode', 'activeCategoryId', 'updatedAt']);
+        incoming().diff(existing()).affectedKeys().hasOnly(['ceremonyTitle', 'ceremonySubtitle', 'stageMode', 'activeCategoryId', 'revealedNomineeIndex', 'updatedAt']);
       allow delete: if false;
     }
 

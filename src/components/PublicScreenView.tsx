@@ -2,10 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import confetti from 'canvas-confetti';
 import { Award, CheckCircle2, Lock, Smartphone, Trophy } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import STAGE_BACKDROP_SRC from '../assets/images/gala_stage_backdrop_1795747444467.jpg';
 import TROPHY_EMBLEM_SRC from '../assets/images/golden_trophy_emblem_1795747445110.jpg';
 import { buildViewUrl } from '../lib/routes';
 import type { PublicCategoryState, PublicCeremonyState } from '../types';
+import NomineeAvatar from './NomineeAvatar';
 
 interface PublicScreenViewProps {
   state: PublicCeremonyState | null;
@@ -191,6 +193,99 @@ export default function PublicScreenView({
           </div>
         )}
 
+        {state.stageMode === 'nominees' && activeCategory && activeCategory.nominees.length > 0 && (() => {
+          const safeIndex = Math.max(
+            0,
+            Math.min(activeCategory.nominees.length - 1, state.revealedNomineeIndex ?? 0)
+          );
+          const spotlightNominee = activeCategory.nominees[safeIndex];
+          return (
+            <div className="space-y-8">
+              <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6 pb-6 border-b border-white/10">
+                <div className="space-y-3 max-w-3xl">
+                  <div className="flex items-center gap-3 text-sm text-[#D4AF37] font-medium tracking-wide">
+                    <span>Presentación de nominados</span>
+                    <span aria-hidden="true">·</span>
+                    <span className="font-mono-tabular text-stone-200">
+                      Candidato {safeIndex + 1} de {activeCategory.nominees.length}
+                    </span>
+                  </div>
+
+                  <h1 className="font-display text-3xl sm:text-5xl font-semibold text-white text-balance leading-tight">
+                    {activeCategory.title}
+                  </h1>
+
+                  {activeCategory.description && (
+                    <p className="text-base sm:text-lg text-stone-300 leading-relaxed">
+                      {activeCategory.description}
+                    </p>
+                  )}
+                </div>
+
+                <div className="text-xs text-stone-400 shrink-0">
+                  La votación comenzará al finalizar la presentación
+                </div>
+              </div>
+
+              {/* One-by-one Nominee Spotlight */}
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.div
+                  key={`spotlight-${activeCategory.id}-${spotlightNominee.id}`}
+                  initial={{ opacity: 0, y: 18, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -14, scale: 0.98 }}
+                  transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
+                  className="max-w-4xl mx-auto rounded-2xl bg-gradient-to-b from-[#171B26] to-[#12161F] border border-[#D4AF37]/40 p-7 sm:p-10 flex flex-col sm:flex-row items-center gap-7 sm:gap-10"
+                >
+                  <NomineeAvatar
+                    name={spotlightNominee.name}
+                    photoUrl={spotlightNominee.photoUrl}
+                    accentColor={spotlightNominee.accentColor}
+                    fallbackLabel={String(safeIndex + 1).padStart(2, '0')}
+                    className="w-40 h-40 sm:w-52 sm:h-52 rounded-2xl border-2 border-[#D4AF37]/40"
+                    textClassName="text-5xl font-semibold"
+                  />
+
+                  <div className="min-w-0 flex-1 text-center sm:text-left space-y-3">
+                    <p className="text-sm font-mono-tabular font-medium text-[#D4AF37] tracking-wide">
+                      Nominado {String(safeIndex + 1).padStart(2, '0')}
+                    </p>
+                    <h2 className="font-display text-3xl sm:text-5xl font-semibold text-white text-balance leading-tight">
+                      {spotlightNominee.name}
+                    </h2>
+                    {spotlightNominee.subtitle && (
+                      <p className="text-base sm:text-xl text-stone-300 leading-relaxed">
+                        {spotlightNominee.subtitle}
+                      </p>
+                    )}
+                  </div>
+                </motion.div>
+              </AnimatePresence>
+
+              {/* Step progress (reveals only numbers, keeping upcoming names secret) */}
+              <div className="flex items-center justify-center gap-2.5 pt-2">
+                {activeCategory.nominees.map((nom, idx) => {
+                  const isCurrent = idx === safeIndex;
+                  const isPresented = idx <= safeIndex;
+                  return (
+                    <div
+                      key={nom.id}
+                      className={`h-2 rounded-full transition-all ${
+                        isCurrent
+                          ? 'w-10 bg-[#D4AF37]'
+                          : isPresented
+                          ? 'w-5 bg-[#D4AF37]/50'
+                          : 'w-5 bg-white/15'
+                      }`}
+                      aria-hidden="true"
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
+
         {state.stageMode === 'category' && activeCategory && (
           <div className="space-y-8">
             <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6 pb-6 border-b border-white/10">
@@ -251,12 +346,19 @@ export default function PublicScreenView({
                   className="rounded-xl bg-[#141821]/95 border border-white/12 p-6 flex flex-col justify-between gap-5"
                 >
                   <div className="space-y-4">
-                    <span
-                      className="w-9 h-9 rounded-lg flex items-center justify-center font-mono-tabular text-sm font-semibold text-white shrink-0"
-                      style={{ backgroundColor: nominee.accentColor || '#D97706' }}
-                    >
-                      {idx + 1}
-                    </span>
+                    <div className="flex items-center justify-between gap-3">
+                      <NomineeAvatar
+                        name={nominee.name}
+                        photoUrl={nominee.photoUrl}
+                        accentColor={nominee.accentColor || '#D97706'}
+                        fallbackLabel={String(idx + 1)}
+                        className="w-16 h-16 rounded-xl border border-white/15"
+                        textClassName="text-lg font-semibold"
+                      />
+                      <span className="font-mono-tabular text-xs font-semibold text-stone-400">
+                        Opción {String(idx + 1).padStart(2, '0')}
+                      </span>
+                    </div>
 
                     <div>
                       <h2 className="font-display text-2xl font-semibold text-white leading-snug">
@@ -312,19 +414,38 @@ export default function PublicScreenView({
 
             {winners.length > 0 ? (
               <div className="max-w-3xl mx-auto rounded-2xl bg-gradient-to-b from-[#1D1A12] to-[#141821] border border-[#D4AF37]/50 p-8 sm:p-10 text-center space-y-6">
-                <div className="w-24 h-24 rounded-2xl overflow-hidden border border-[#D4AF37]/40 bg-[#0B0D12] mx-auto flex items-center justify-center">
-                  {!trophyFailed ? (
-                    <img
-                      src={TROPHY_EMBLEM_SRC}
-                      alt="Trofeo ganador"
-                      referrerPolicy="no-referrer"
-                      onError={() => setTrophyFailed(true)}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <Trophy className="w-12 h-12 text-[#D4AF37]" />
-                  )}
-                </div>
+                {winners.some((w) => Boolean(w.photoUrl)) ? (
+                  <div className="flex items-center justify-center gap-4">
+                    {winners.map((w) => (
+                      <div key={w.id} className="relative">
+                        <NomineeAvatar
+                          name={w.name}
+                          photoUrl={w.photoUrl}
+                          accentColor={w.accentColor}
+                          className="w-28 h-28 sm:w-36 sm:h-36 rounded-2xl border-2 border-[#D4AF37]/60"
+                          textClassName="text-4xl font-semibold"
+                        />
+                        <div className="absolute -bottom-2 -right-2 w-9 h-9 rounded-xl bg-[#D4AF37] text-[#0B0D12] flex items-center justify-center shadow-md">
+                          <Trophy className="w-4 h-4" aria-hidden="true" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="w-24 h-24 rounded-2xl overflow-hidden border border-[#D4AF37]/40 bg-[#0B0D12] mx-auto flex items-center justify-center">
+                    {!trophyFailed ? (
+                      <img
+                        src={TROPHY_EMBLEM_SRC}
+                        alt="Trofeo ganador"
+                        referrerPolicy="no-referrer"
+                        onError={() => setTrophyFailed(true)}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <Trophy className="w-12 h-12 text-[#D4AF37]" />
+                    )}
+                  </div>
+                )}
 
                 <div className="space-y-2">
                   <h1 className="font-display text-4xl sm:text-6xl font-semibold text-[#F3E5AB] text-balance leading-tight">
@@ -372,11 +493,20 @@ export default function PublicScreenView({
                           : 'bg-[#141821]/80 border-white/10 text-stone-300'
                       }`}
                     >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        {isWinner && (
-                          <Award className="w-4 h-4 text-[#D4AF37] shrink-0" aria-hidden="true" />
-                        )}
-                        <span className="font-medium truncate">{nom.name}</span>
+                      <div className="flex items-center gap-3 min-w-0">
+                        <NomineeAvatar
+                          name={nom.name}
+                          photoUrl={nom.photoUrl}
+                          accentColor={nom.accentColor}
+                          className="w-9 h-9 rounded-lg"
+                          textClassName="text-xs font-semibold"
+                        />
+                        <div className="flex items-center gap-2 min-w-0">
+                          {isWinner && (
+                            <Award className="w-4 h-4 text-[#D4AF37] shrink-0" aria-hidden="true" />
+                          )}
+                          <span className="font-medium truncate">{nom.name}</span>
+                        </div>
                       </div>
                       <span className="font-mono-tabular text-sm shrink-0">
                         {nom.votes ?? 0} ({(nom.percentage ?? 0).toFixed(0)}%)
@@ -423,8 +553,18 @@ export default function PublicScreenView({
 
                       {catWinners.length > 0 ? (
                         <div className="flex items-center justify-between gap-4 pt-3 border-t border-white/10">
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <CheckCircle2 className="w-5 h-5 text-[#D4AF37] shrink-0" aria-hidden="true" />
+                          <div className="flex items-center gap-3 min-w-0">
+                            {catWinners[0].photoUrl ? (
+                              <NomineeAvatar
+                                name={catWinners[0].name}
+                                photoUrl={catWinners[0].photoUrl}
+                                accentColor={catWinners[0].accentColor}
+                                className="w-10 h-10 rounded-lg border border-[#D4AF37]/40"
+                                textClassName="text-sm font-semibold"
+                              />
+                            ) : (
+                              <CheckCircle2 className="w-5 h-5 text-[#D4AF37] shrink-0" aria-hidden="true" />
+                            )}
                             <span className="font-display text-xl font-semibold text-[#F3E5AB] truncate">
                               {catWinners.map((w) => w.name).join(' & ')}
                             </span>

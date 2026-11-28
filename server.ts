@@ -37,6 +37,7 @@ interface CeremonyStore {
   ceremonySubtitle: string;
   stageMode: StageMode;
   activeCategoryId: string | null;
+  revealedNomineeIndex: number;
   showLiveTalliesOnScreen: boolean;
   categories: Category[];
   votes: StoredVote[];
@@ -50,7 +51,7 @@ const DATA_DIR = path.resolve(process.cwd(), 'data');
 const STORE_PATH = path.resolve(DATA_DIR, 'ceremony-store.json');
 const DIST_DIR = path.resolve(process.cwd(), 'dist');
 
-const VALID_STAGE_MODES: StageMode[] = ['lobby', 'category', 'closed', 'winner', 'summary'];
+const VALID_STAGE_MODES: StageMode[] = ['lobby', 'nominees', 'category', 'closed', 'winner', 'summary'];
 const ACCENT_PALETTE = ['#D97706', '#0F766E', '#B45309', '#1D4ED8', '#BE123C', '#4338CA'];
 
 function createDefaultCategories(): Category[] {
@@ -117,6 +118,7 @@ function createInitialStore(): CeremonyStore {
     ceremonySubtitle: 'Gala anual de reconocimientos en vivo',
     stageMode: 'lobby',
     activeCategoryId: 'cat-chef',
+    revealedNomineeIndex: 0,
     showLiveTalliesOnScreen: true,
     categories: createDefaultCategories(),
     votes: [],
@@ -140,6 +142,10 @@ function loadStore(): CeremonyStore {
         ceremonySubtitle: typeof parsed.ceremonySubtitle === 'string' ? parsed.ceremonySubtitle : fallback.ceremonySubtitle,
         stageMode: VALID_STAGE_MODES.includes(parsed.stageMode as StageMode) ? (parsed.stageMode as StageMode) : 'lobby',
         activeCategoryId: typeof parsed.activeCategoryId === 'string' ? parsed.activeCategoryId : fallback.activeCategoryId,
+        revealedNomineeIndex:
+          typeof parsed.revealedNomineeIndex === 'number' && Number.isFinite(parsed.revealedNomineeIndex)
+            ? Math.max(0, Math.min(20, Math.trunc(parsed.revealedNomineeIndex)))
+            : 0,
         showLiveTalliesOnScreen: typeof parsed.showLiveTalliesOnScreen === 'boolean' ? parsed.showLiveTalliesOnScreen : true,
         categories: Array.isArray(parsed.categories) && parsed.categories.length > 0 ? parsed.categories : fallback.categories,
         votes: Array.isArray(parsed.votes) ? parsed.votes : [],
@@ -389,6 +395,7 @@ function buildPublicState(audience: 'screen' | 'voter'): PublicCeremonyState {
     ceremonySubtitle: store.ceremonySubtitle,
     stageMode: store.stageMode,
     activeCategoryId: store.activeCategoryId,
+    revealedNomineeIndex: store.revealedNomineeIndex,
     showLiveTalliesOnScreen: store.showLiveTalliesOnScreen,
     connectedVotersCount: voters,
     registeredVotersCount: Object.keys(store.voters).length,
@@ -461,6 +468,7 @@ function buildAdminState(): AdminCeremonyState {
     ceremonySubtitle: store.ceremonySubtitle,
     stageMode: store.stageMode,
     activeCategoryId: store.activeCategoryId,
+    revealedNomineeIndex: store.revealedNomineeIndex,
     showLiveTalliesOnScreen: store.showLiveTalliesOnScreen,
     connectedVotersCount: voters,
     connectedScreensCount: screens,
@@ -764,7 +772,7 @@ async function startServer(): Promise<void> {
   });
 
   app.put('/api/admin/ceremony', requireAdmin, (req, res) => {
-    const { ceremonyTitle, ceremonySubtitle, stageMode, activeCategoryId, showLiveTalliesOnScreen } = req.body ?? {};
+    const { ceremonyTitle, ceremonySubtitle, stageMode, activeCategoryId, revealedNomineeIndex, showLiveTalliesOnScreen } = req.body ?? {};
 
     if (typeof ceremonyTitle === 'string') {
       const clean = ceremonyTitle.trim().slice(0, 80);
@@ -807,6 +815,9 @@ async function startServer(): Promise<void> {
         return;
       }
     }
+    if (typeof revealedNomineeIndex === 'number' && Number.isFinite(revealedNomineeIndex)) {
+      store.revealedNomineeIndex = Math.max(0, Math.min(20, Math.trunc(revealedNomineeIndex)));
+    }
     if (typeof showLiveTalliesOnScreen === 'boolean') {
       store.showLiveTalliesOnScreen = showLiveTalliesOnScreen;
     }
@@ -828,7 +839,7 @@ async function startServer(): Promise<void> {
     }
 
     const nominees: Nominee[] = rawNominees
-      .filter((n): n is { name: string; subtitle?: string; accentColor?: string } => {
+      .filter((n): n is { name: string; subtitle?: string; accentColor?: string; photoUrl?: string } => {
         return typeof n === 'object' && n !== null && typeof (n as { name?: unknown }).name === 'string' && (n as { name: string }).name.trim().length > 0;
       })
       .map((n, idx) => ({
@@ -838,6 +849,9 @@ async function startServer(): Promise<void> {
         accentColor: typeof n.accentColor === 'string' && /^#[0-9A-Fa-f]{6}$/.test(n.accentColor)
           ? n.accentColor
           : ACCENT_PALETTE[idx % ACCENT_PALETTE.length],
+        ...(typeof n.photoUrl === 'string' && n.photoUrl.trim().length > 0 && n.photoUrl.length <= 120000
+          ? { photoUrl: n.photoUrl.trim() }
+          : {}),
       }));
 
     if (nominees.length < 2) {
@@ -894,7 +908,7 @@ async function startServer(): Promise<void> {
     }
     if (Array.isArray(nominees)) {
       const updatedNominees: Nominee[] = (nominees as unknown[])
-        .filter((n): n is { id?: string; name: string; subtitle?: string; accentColor?: string } => {
+        .filter((n): n is { id?: string; name: string; subtitle?: string; accentColor?: string; photoUrl?: string } => {
           return typeof n === 'object' && n !== null && typeof (n as { name?: unknown }).name === 'string' && (n as { name: string }).name.trim().length > 0;
         })
         .map((n, idx) => ({
@@ -904,6 +918,9 @@ async function startServer(): Promise<void> {
           accentColor: typeof n.accentColor === 'string' && /^#[0-9A-Fa-f]{6}$/.test(n.accentColor)
             ? n.accentColor
             : ACCENT_PALETTE[idx % ACCENT_PALETTE.length],
+          ...(typeof n.photoUrl === 'string' && n.photoUrl.trim().length > 0 && n.photoUrl.length <= 120000
+            ? { photoUrl: n.photoUrl.trim() }
+            : {}),
         }));
 
       if (updatedNominees.length < 2) {

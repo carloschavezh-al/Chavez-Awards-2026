@@ -18,13 +18,17 @@
         },
         "stageMode": {
           "type": "string",
-          "enum": ["lobby", "category", "closed", "winner", "summary"],
+          "enum": ["lobby", "nominees", "category", "closed", "winner", "summary"],
           "description": "Current phase shown on the public presentation screen"
         },
         "activeCategoryId": {
           "type": "string",
           "maxLength": 128,
           "description": "ID of the single category currently presented on stage and open for voting"
+        },
+        "revealedNomineeIndex": {
+          "type": "integer",
+          "description": "Zero-based index of the nominee currently spotlighted during step-by-step nominee presentation (0 to 19)"
         },
         "updatedAt": {
           "type": "string",

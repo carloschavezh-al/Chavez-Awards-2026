@@ -1,10 +1,11 @@
-export type StageMode = 'lobby' | 'category' | 'closed' | 'winner' | 'summary';
+export type StageMode = 'lobby' | 'nominees' | 'category' | 'closed' | 'winner' | 'summary';
 
 export interface Nominee {
   id: string;
   name: string;
   subtitle: string;
   accentColor: string;
+  photoUrl?: string;
 }
 
 export interface Category {
@@ -38,6 +39,7 @@ export interface PublicCeremonyState {
   ceremonySubtitle: string;
   stageMode: StageMode;
   activeCategoryId: string | null;
+  revealedNomineeIndex: number;
   showLiveTalliesOnScreen: boolean;
   connectedVotersCount: number;
   registeredVotersCount: number;
@@ -74,6 +76,7 @@ export interface AdminCeremonyState {
   ceremonySubtitle: string;
   stageMode: StageMode;
   activeCategoryId: string | null;
+  revealedNomineeIndex: number;
   showLiveTalliesOnScreen: boolean;
   connectedVotersCount: number;
   connectedScreensCount: number;

@@ -26,6 +26,7 @@ interface LocalStore {
   ceremonySubtitle: string;
   stageMode: StageMode;
   activeCategoryId: string | null;
+  revealedNomineeIndex?: number;
   showLiveTalliesOnScreen: boolean;
   categories: Category[];
   votes: LocalVote[];
@@ -109,6 +110,7 @@ function getLocalStore(): LocalStore {
     ceremonySubtitle: 'Gala anual de reconocimientos en vivo',
     stageMode: 'lobby',
     activeCategoryId: 'cat-chef',
+    revealedNomineeIndex: 0,
     showLiveTalliesOnScreen: true,
     categories: defaultCategories(),
     votes: [],
@@ -197,6 +199,7 @@ export function getLocalPublicState(audience: 'screen' | 'voter'): PublicCeremon
     ceremonySubtitle: store.ceremonySubtitle,
     stageMode: store.stageMode,
     activeCategoryId: store.activeCategoryId,
+    revealedNomineeIndex: typeof store.revealedNomineeIndex === 'number' ? store.revealedNomineeIndex : 0,
     showLiveTalliesOnScreen: store.showLiveTalliesOnScreen,
     connectedVotersCount: Object.keys(store.voters).length,
     registeredVotersCount: Object.keys(store.voters).length,
@@ -250,6 +253,7 @@ export function getLocalAdminState(): AdminCeremonyState {
     ceremonySubtitle: store.ceremonySubtitle,
     stageMode: store.stageMode,
     activeCategoryId: store.activeCategoryId,
+    revealedNomineeIndex: typeof store.revealedNomineeIndex === 'number' ? store.revealedNomineeIndex : 0,
     showLiveTalliesOnScreen: store.showLiveTalliesOnScreen,
     connectedVotersCount: voters.length,
     connectedScreensCount: 1,
@@ -307,6 +311,9 @@ export function localAdminMutate(path: string, method: string, body: Record<stri
     if (body.activeCategoryId !== undefined) {
       store.activeCategoryId = (body.activeCategoryId as string | null) ?? null;
     }
+    if (typeof body.revealedNomineeIndex === 'number') {
+      store.revealedNomineeIndex = Math.max(0, Math.min(20, Math.trunc(body.revealedNomineeIndex)));
+    }
     if (typeof body.showLiveTalliesOnScreen === 'boolean') {
       store.showLiveTalliesOnScreen = body.showLiveTalliesOnScreen;
     }
@@ -320,11 +327,12 @@ export function localAdminMutate(path: string, method: string, body: Record<stri
       order: maxOrder + 1,
       isVotingOpen: false,
       isWinnerRevealed: false,
-      nominees: rawNominees.map((n: { name: string; subtitle?: string; accentColor?: string }, i: number) => ({
+      nominees: rawNominees.map((n: { name: string; subtitle?: string; accentColor?: string; photoUrl?: string }, i: number) => ({
         id: `nom-${Math.random().toString(36).slice(2, 10)}`,
         name: n.name.trim(),
         subtitle: (n.subtitle || '').trim(),
         accentColor: n.accentColor || ['#D97706', '#0F766E', '#BE123C', '#1D4ED8'][i % 4],
+        ...(typeof n.photoUrl === 'string' && n.photoUrl.trim() ? { photoUrl: n.photoUrl.trim() } : {}),
       })),
     };
     store.categories.push(newCat);
@@ -344,11 +352,12 @@ export function localAdminMutate(path: string, method: string, body: Record<stri
       if (typeof body.isVotingOpen === 'boolean') cat.isVotingOpen = body.isVotingOpen;
       if (typeof body.isWinnerRevealed === 'boolean') cat.isWinnerRevealed = body.isWinnerRevealed;
       if (Array.isArray(body.nominees)) {
-        cat.nominees = body.nominees.map((n: { id?: string; name: string; subtitle?: string; accentColor?: string }, i: number) => ({
+        cat.nominees = body.nominees.map((n: { id?: string; name: string; subtitle?: string; accentColor?: string; photoUrl?: string }, i: number) => ({
           id: n.id || `nom-${Math.random().toString(36).slice(2, 10)}`,
           name: n.name.trim(),
           subtitle: (n.subtitle || '').trim(),
           accentColor: n.accentColor || ['#D97706', '#0F766E', '#BE123C', '#1D4ED8'][i % 4],
+          ...(typeof n.photoUrl === 'string' && n.photoUrl.trim() ? { photoUrl: n.photoUrl.trim() } : {}),
         }));
       }
     }

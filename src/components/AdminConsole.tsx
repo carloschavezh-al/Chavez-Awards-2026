@@ -5,17 +5,22 @@ import {
   ArrowDown,
   ArrowUp,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   ExternalLink,
+  ImagePlus,
   Lock,
   LogOut,
   Monitor,
+  Play,
   Plus,
   RotateCcw,
   ShieldCheck,
   Smartphone,
   Trash2,
   Unlock,
+  X,
 } from 'lucide-react';
 import { auth, googleProvider } from '../lib/firebase';
 import {
@@ -31,8 +36,10 @@ import {
   updateCategoryInFirestore,
   updateCeremonyInFirestore,
 } from '../lib/firestoreCeremony';
+import { compressNomineeImage } from '../lib/imageUpload';
 import { buildViewUrl } from '../lib/routes';
 import type { AdminCategoryState, AdminCeremonyState, PublicCeremonyState, StageMode } from '../types';
+import NomineeAvatar from './NomineeAvatar';
 import PublicScreenView from './PublicScreenView';
 import ReportsView from './ReportsView';
 import VoterView from './VoterView';
@@ -46,6 +53,7 @@ interface NomineeDraft {
   name: string;
   subtitle: string;
   accentColor: string;
+  photoUrl?: string;
 }
 
 function derivePublicState(
@@ -73,6 +81,7 @@ function derivePublicState(
     ceremonySubtitle: admin.ceremonySubtitle,
     stageMode: admin.stageMode,
     activeCategoryId: admin.activeCategoryId,
+    revealedNomineeIndex: admin.revealedNomineeIndex,
     showLiveTalliesOnScreen: false,
     connectedVotersCount: admin.connectedVotersCount,
     registeredVotersCount: admin.registeredVotersCount,
@@ -126,6 +135,7 @@ export default function AdminConsole() {
   const [catTitleDraft, setCatTitleDraft] = useState('');
   const [catDescDraft, setCatDescDraft] = useState('');
   const [nomineesDraft, setNomineesDraft] = useState<NomineeDraft[]>([]);
+  const [uploadingPhotoIdx, setUploadingPhotoIdx] = useState<number | null>(null);
   const [savingCategory, setSavingCategory] = useState(false);
 
   // Confirmation dialog state (no window.confirm)
@@ -294,6 +304,8 @@ export default function AdminConsole() {
     ceremonySubtitle?: string;
     stageMode?: StageMode;
     activeCategoryId?: string | null;
+    revealedNomineeIndex?: number;
+    openVotingOnActiveCategory?: boolean;
   }) => {
     if (!adminState) return false;
     return runAdminMutation(() => updateCeremonyInFirestore(patch, adminState));
@@ -334,8 +346,8 @@ export default function AdminConsole() {
     setCatTitleDraft('');
     setCatDescDraft('');
     setNomineesDraft([
-      { name: '', subtitle: '', accentColor: ACCENT_SWATCHES[0] },
-      { name: '', subtitle: '', accentColor: ACCENT_SWATCHES[1] },
+      { name: '', subtitle: '', accentColor: ACCENT_SWATCHES[0], photoUrl: '' },
+      { name: '', subtitle: '', accentColor: ACCENT_SWATCHES[1], photoUrl: '' },
     ]);
   };
 
@@ -349,8 +361,29 @@ export default function AdminConsole() {
         name: n.name,
         subtitle: n.subtitle,
         accentColor: n.accentColor || ACCENT_SWATCHES[0],
+        photoUrl: n.photoUrl || '',
       }))
     );
+  };
+
+  const handleNomineePhotoUpload = async (index: number, file: File | null) => {
+    if (!file) return;
+    setUploadingPhotoIdx(index);
+    setActionError(null);
+    try {
+      const compressedDataUrl = await compressNomineeImage(file);
+      setNomineesDraft((prev) =>
+        prev.map((item, idx) =>
+          idx === index ? { ...item, photoUrl: compressedDataUrl } : item
+        )
+      );
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? err.message : 'No se pudo cargar la foto del nominado.'
+      );
+    } finally {
+      setUploadingPhotoIdx((curr) => (curr === index ? null : curr));
+    }
   };
 
   const saveCategoryEditor = async (e: React.FormEvent) => {
@@ -540,9 +573,10 @@ export default function AdminConsole() {
 
   const stageModes: Array<{ id: StageMode; label: string; hint: string }> = [
     { id: 'lobby', label: 'Bienvenida', hint: 'Muestra título y QR para unirse' },
-    { id: 'category', label: 'Presentar y votar', hint: 'Muestra solo las opciones de la categoría activa' },
+    { id: 'nominees', label: 'Presentar candidatos', hint: 'Muestra los nominados uno a uno con foto antes de votar' },
+    { id: 'category', label: 'Presentar y votar', hint: 'Muestra todas las opciones con fotos para votar' },
     { id: 'closed', label: 'Cerrar y suspenso', hint: 'Cierra votación antes de revelar' },
-    { id: 'winner', label: 'Revelar ganador', hint: 'Anuncia al ganador con celebración' },
+    { id: 'winner', label: 'Revelar ganador', hint: 'Anuncia al ganador con su foto y celebración' },
     { id: 'summary', label: 'Cuadro de honor', hint: 'Resumen final de los ganadores revelados' },
   ];
 
@@ -687,7 +721,10 @@ export default function AdminConsole() {
                         key={m.id}
                         type="button"
                         onClick={async () => {
-                          const ok = await updateCeremony({ stageMode: m.id });
+                          const ok = await updateCeremony({
+                            stageMode: m.id,
+                            ...(m.id === 'nominees' ? { revealedNomineeIndex: 0 } : {}),
+                          });
                           if (ok) showToast(`Pantalla cambiada a: ${m.label}`);
                         }}
                         className={`text-left p-3.5 rounded-xl border transition-colors ${
@@ -708,6 +745,115 @@ export default function AdminConsole() {
                     );
                   })}
                 </div>
+
+                {/* One-by-one Nominee Presentation Stepper (shown when stageMode === 'nominees') */}
+                {adminState.stageMode === 'nominees' && activeCategory && activeCategory.nominees.length > 0 && (() => {
+                  const totalNominees = activeCategory.nominees.length;
+                  const safeIndex = Math.max(
+                    0,
+                    Math.min(totalNominees - 1, adminState.revealedNomineeIndex ?? 0)
+                  );
+                  const currentNominee = activeCategory.nominees[safeIndex];
+                  const isFirst = safeIndex === 0;
+                  const isLast = safeIndex >= totalNominees - 1;
+
+                  return (
+                    <div className="rounded-xl bg-amber-50/70 border border-amber-200 p-4 sm:p-5 space-y-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-xs font-semibold text-amber-900">
+                            Presentación uno a uno · {activeCategory.title}
+                          </p>
+                          <p className="text-xs text-amber-800/80 mt-0.5 font-mono-tabular">
+                            Mostrando candidato {safeIndex + 1} de {totalNominees}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const ok = await updateCeremony({
+                              stageMode: 'category',
+                              openVotingOnActiveCategory: true,
+                            });
+                            if (ok) showToast(`Votación iniciada: ${activeCategory.title}`);
+                          }}
+                          className="min-h-[38px] px-3.5 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
+                        >
+                          <Play className="w-3.5 h-3.5" aria-hidden="true" />
+                          <span>Iniciar votación ahora</span>
+                        </button>
+                      </div>
+
+                      <div className="bg-white rounded-xl border border-amber-200/80 p-3.5 flex items-center justify-between gap-4">
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          <NomineeAvatar
+                            name={currentNominee.name}
+                            photoUrl={currentNominee.photoUrl}
+                            accentColor={currentNominee.accentColor}
+                            fallbackLabel={String(safeIndex + 1)}
+                            className="w-14 h-14 rounded-xl border border-slate-200"
+                            textClassName="text-base font-semibold"
+                          />
+                          <div className="min-w-0">
+                            <p className="text-[11px] font-mono-tabular font-semibold text-amber-800">
+                              Candidato {String(safeIndex + 1).padStart(2, '0')}
+                            </p>
+                            <p className="font-display text-lg font-semibold text-slate-900 truncate">
+                              {currentNominee.name}
+                            </p>
+                            {currentNominee.subtitle && (
+                              <p className="text-xs text-slate-500 truncate">
+                                {currentNominee.subtitle}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            disabled={isFirst}
+                            onClick={() =>
+                              updateCeremony({ revealedNomineeIndex: safeIndex - 1 })
+                            }
+                            className="min-h-[38px] px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 text-xs font-semibold hover:bg-slate-50 disabled:opacity-40 inline-flex items-center gap-1"
+                          >
+                            <ChevronLeft className="w-4 h-4" aria-hidden="true" />
+                            <span>Anterior</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isLast}
+                            onClick={() =>
+                              updateCeremony({ revealedNomineeIndex: safeIndex + 1 })
+                            }
+                            className="min-h-[38px] px-3.5 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 disabled:opacity-40 inline-flex items-center gap-1"
+                          >
+                            <span>{isLast ? 'Último candidato' : 'Siguiente'}</span>
+                            {!isLast && <ChevronRight className="w-4 h-4" aria-hidden="true" />}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {activeCategory.nominees.map((nom, idx) => (
+                          <button
+                            key={nom.id}
+                            type="button"
+                            onClick={() => updateCeremony({ revealedNomineeIndex: idx })}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${
+                              idx === safeIndex
+                                ? 'bg-amber-700 text-white border-amber-700'
+                                : 'bg-white text-slate-700 border-amber-200 hover:bg-amber-100/60'
+                            }`}
+                          >
+                            {String(idx + 1).padStart(2, '0')}. {nom.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-4">
                   <p className="text-xs text-slate-500">
@@ -790,11 +936,12 @@ export default function AdminConsole() {
                             onClick={async () => {
                               const ok = await updateCeremony({
                                 activeCategoryId: cat.id,
+                                revealedNomineeIndex: 0,
                                 stageMode:
                                   adminState.stageMode === 'lobby' ||
                                   adminState.stageMode === 'summary' ||
                                   adminState.stageMode === 'winner'
-                                    ? 'category'
+                                    ? 'nominees'
                                     : adminState.stageMode,
                               });
                               if (ok) showToast(`Categoría activa: ${cat.title}`);
@@ -1127,78 +1274,130 @@ export default function AdminConsole() {
                       </button>
                     </div>
 
-                    <div className="space-y-2.5">
+                    <div className="space-y-3">
                       {nomineesDraft.map((nom, i) => (
                         <div
                           key={nom.id ?? `draft-${i}`}
-                          className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-center"
+                          className="rounded-xl border border-slate-200 bg-slate-50/50 p-3 space-y-2.5"
                         >
-                          <div className="sm:col-span-4">
-                            <input
-                              type="text"
-                              value={nom.name}
-                              onChange={(e) =>
-                                setNomineesDraft((prev) =>
-                                  prev.map((item, idx) =>
-                                    idx === i ? { ...item, name: e.target.value } : item
-                                  )
-                                )
-                              }
-                              placeholder={`Nominado ${i + 1}`}
-                              maxLength={60}
-                              className="w-full min-h-[40px] px-3 py-2 rounded-lg border border-slate-300 text-sm"
-                            />
-                          </div>
-                          <div className="sm:col-span-5">
-                            <input
-                              type="text"
-                              value={nom.subtitle}
-                              onChange={(e) =>
-                                setNomineesDraft((prev) =>
-                                  prev.map((item, idx) =>
-                                    idx === i ? { ...item, subtitle: e.target.value } : item
-                                  )
-                                )
-                              }
-                              placeholder="Motivo o parentesco (opcional)"
-                              maxLength={120}
-                              className="w-full min-h-[40px] px-3 py-2 rounded-lg border border-slate-300 text-sm"
-                            />
-                          </div>
-                          <div className="sm:col-span-2 flex items-center gap-1.5">
-                            {ACCENT_SWATCHES.map((swatch) => (
-                              <button
-                                key={swatch}
-                                type="button"
-                                aria-label={`Color ${swatch}`}
-                                onClick={() =>
+                          <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-center">
+                            <div className="sm:col-span-4">
+                              <input
+                                type="text"
+                                value={nom.name}
+                                onChange={(e) =>
                                   setNomineesDraft((prev) =>
                                     prev.map((item, idx) =>
-                                      idx === i ? { ...item, accentColor: swatch } : item
+                                      idx === i ? { ...item, name: e.target.value } : item
                                     )
                                   )
                                 }
-                                className={`w-5 h-5 rounded-full transition-transform ${
-                                  nom.accentColor === swatch
-                                    ? 'ring-2 ring-offset-1 ring-slate-900 scale-110'
-                                    : 'opacity-70 hover:opacity-100'
-                                }`}
-                                style={{ backgroundColor: swatch }}
+                                placeholder={`Nominado ${i + 1}`}
+                                maxLength={60}
+                                className="w-full min-h-[40px] px-3 py-2 rounded-lg border border-slate-300 bg-white text-sm"
                               />
-                            ))}
+                            </div>
+                            <div className="sm:col-span-5">
+                              <input
+                                type="text"
+                                value={nom.subtitle}
+                                onChange={(e) =>
+                                  setNomineesDraft((prev) =>
+                                    prev.map((item, idx) =>
+                                      idx === i ? { ...item, subtitle: e.target.value } : item
+                                    )
+                                  )
+                                }
+                                placeholder="Motivo o parentesco (opcional)"
+                                maxLength={120}
+                                className="w-full min-h-[40px] px-3 py-2 rounded-lg border border-slate-300 bg-white text-sm"
+                              />
+                            </div>
+                            <div className="sm:col-span-2 flex items-center gap-1.5">
+                              {ACCENT_SWATCHES.map((swatch) => (
+                                <button
+                                  key={swatch}
+                                  type="button"
+                                  aria-label={`Color ${swatch}`}
+                                  onClick={() =>
+                                    setNomineesDraft((prev) =>
+                                      prev.map((item, idx) =>
+                                        idx === i ? { ...item, accentColor: swatch } : item
+                                      )
+                                    )
+                                  }
+                                  className={`w-5 h-5 rounded-full transition-transform ${
+                                    nom.accentColor === swatch
+                                      ? 'ring-2 ring-offset-1 ring-slate-900 scale-110'
+                                      : 'opacity-70 hover:opacity-100'
+                                  }`}
+                                  style={{ backgroundColor: swatch }}
+                                />
+                              ))}
+                            </div>
+                            <div className="sm:col-span-1 flex justify-end">
+                              <button
+                                type="button"
+                                disabled={nomineesDraft.length <= 2}
+                                onClick={() =>
+                                  setNomineesDraft((prev) => prev.filter((_, idx) => idx !== i))
+                                }
+                                aria-label="Eliminar nominado"
+                                className="p-2 text-slate-400 hover:text-rose-700 disabled:opacity-30"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
                           </div>
-                          <div className="sm:col-span-1 flex justify-end">
-                            <button
-                              type="button"
-                              disabled={nomineesDraft.length <= 2}
-                              onClick={() =>
-                                setNomineesDraft((prev) => prev.filter((_, idx) => idx !== i))
-                              }
-                              aria-label="Eliminar nominado"
-                              className="p-2 text-slate-400 hover:text-rose-700 disabled:opacity-30"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+
+                          {/* Nominee Photo Upload & Preview */}
+                          <div className="flex flex-wrap items-center gap-3 pt-1">
+                            <NomineeAvatar
+                              name={nom.name || `N${i + 1}`}
+                              photoUrl={nom.photoUrl}
+                              accentColor={nom.accentColor}
+                              fallbackLabel={String(i + 1)}
+                              className="w-10 h-10 rounded-lg border border-slate-200"
+                              textClassName="text-xs font-semibold"
+                            />
+
+                            <label className="min-h-[34px] px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 inline-flex items-center gap-1.5 cursor-pointer">
+                              <ImagePlus className="w-3.5 h-3.5 text-amber-700" aria-hidden="true" />
+                              <span>
+                                {uploadingPhotoIdx === i
+                                  ? 'Procesando foto...'
+                                  : nom.photoUrl
+                                  ? 'Cambiar foto'
+                                  : 'Subir foto'}
+                              </span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="sr-only"
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0] ?? null;
+                                  e.target.value = '';
+                                  void handleNomineePhotoUpload(i, file);
+                                }}
+                              />
+                            </label>
+
+                            {nom.photoUrl && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setNomineesDraft((prev) =>
+                                    prev.map((item, idx) =>
+                                      idx === i ? { ...item, photoUrl: '' } : item
+                                    )
+                                  )
+                                }
+                                className="min-h-[34px] px-2.5 py-1.5 rounded-lg text-xs font-medium text-rose-700 hover:bg-rose-50 inline-flex items-center gap-1"
+                              >
+                                <X className="w-3.5 h-3.5" aria-hidden="true" />
+                                <span>Quitar</span>
+                              </button>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -1330,16 +1529,19 @@ export default function AdminConsole() {
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-3 border-t border-slate-100">
-                      {cat.nominees.map((nom) => (
+                      {cat.nominees.map((nom, nomIdx) => (
                         <div
                           key={nom.id}
                           className="rounded-lg bg-slate-50 border border-slate-200/80 px-3.5 py-2.5 flex items-center justify-between gap-2"
                         >
                           <div className="flex items-center gap-2.5 min-w-0">
-                            <span
-                              className="w-2.5 h-2.5 rounded-full shrink-0"
-                              style={{ backgroundColor: nom.accentColor }}
-                              aria-hidden="true"
+                            <NomineeAvatar
+                              name={nom.name}
+                              photoUrl={nom.photoUrl}
+                              accentColor={nom.accentColor}
+                              fallbackLabel={String(nomIdx + 1)}
+                              className="w-8 h-8 rounded-lg"
+                              textClassName="text-xs font-semibold"
                             />
                             <div className="min-w-0">
                               <p className="text-sm font-medium text-slate-900 truncate">

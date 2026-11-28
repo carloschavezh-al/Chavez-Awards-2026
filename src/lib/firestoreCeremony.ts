@@ -37,11 +37,25 @@ function resolveCeremonyTitle(title?: string | null): string {
 
 const ACCENT_PALETTE = ['#D97706', '#0F766E', '#B45309', '#1D4ED8', '#BE123C', '#4338CA'];
 
+export function sanitizePhotoUrl(raw?: string): string {
+  const clean = (raw || '').trim();
+  if (!clean || clean.length > 120000) return '';
+  if (
+    clean.startsWith('data:image/') ||
+    clean.startsWith('https://') ||
+    clean.startsWith('http://')
+  ) {
+    return clean;
+  }
+  return '';
+}
+
 export interface FirestoreCeremonyDoc {
   ceremonyTitle: string;
   ceremonySubtitle: string;
   stageMode: StageMode;
   activeCategoryId: string | null;
+  revealedNomineeIndex?: number;
   updatedAt?: Timestamp;
 }
 
@@ -181,6 +195,7 @@ export async function ensureInitialCeremonySeeded(): Promise<void> {
       ceremonySubtitle: 'Gala anual de reconocimientos en vivo',
       stageMode: 'lobby',
       activeCategoryId: seedCats[0].id,
+      revealedNomineeIndex: 0,
       updatedAt: serverTimestamp(),
     });
     for (const cat of seedCats) {
@@ -202,7 +217,12 @@ export async function ensureInitialCeremonySeeded(): Promise<void> {
 }
 
 export async function updateCeremonyInFirestore(
-  patch: Partial<Pick<FirestoreCeremonyDoc, 'ceremonyTitle' | 'ceremonySubtitle' | 'stageMode' | 'activeCategoryId'>>,
+  patch: Partial<
+    Pick<
+      FirestoreCeremonyDoc,
+      'ceremonyTitle' | 'ceremonySubtitle' | 'stageMode' | 'activeCategoryId' | 'revealedNomineeIndex'
+    >
+  > & { openVotingOnActiveCategory?: boolean },
   currentState: AdminCeremonyState
 ): Promise<void> {
   const ceremonyRef = doc(db, 'ceremony', 'main');
@@ -211,6 +231,14 @@ export async function updateCeremonyInFirestore(
   const nextStageMode = patch.stageMode ?? currentState.stageMode;
   const nextActiveId =
     patch.activeCategoryId !== undefined ? patch.activeCategoryId : currentState.activeCategoryId;
+  const rawNomineeIndex =
+    patch.revealedNomineeIndex !== undefined
+      ? patch.revealedNomineeIndex
+      : currentState.revealedNomineeIndex;
+  const nextRevealedNomineeIndex = Math.max(
+    0,
+    Math.min(20, Math.floor(typeof rawNomineeIndex === 'number' ? rawNomineeIndex : 0))
+  );
 
   try {
     const batch = writeBatch(db);
@@ -221,6 +249,7 @@ export async function updateCeremonyInFirestore(
         ceremonySubtitle: nextSubtitle,
         stageMode: nextStageMode,
         activeCategoryId: nextActiveId,
+        revealedNomineeIndex: nextRevealedNomineeIndex,
         updatedAt: serverTimestamp(),
       },
       { merge: true }
@@ -242,6 +271,7 @@ export async function updateCeremonyInFirestore(
               name: n.name,
               subtitle: n.subtitle,
               accentColor: n.accentColor,
+              photoUrl: sanitizePhotoUrl(n.photoUrl),
               votes: n.votes,
               percentage: n.percentage,
             }));
@@ -258,6 +288,11 @@ export async function updateCeremonyInFirestore(
             isVotingOpen: false,
             updatedAt: serverTimestamp(),
           });
+        } else if (patch.openVotingOnActiveCategory) {
+          batch.update(doc(db, 'categories', activeCat.id), {
+            isVotingOpen: true,
+            updatedAt: serverTimestamp(),
+          });
         }
       }
     }
@@ -272,7 +307,7 @@ export async function createCategoryInFirestore(input: {
   title: string;
   description: string;
   order: number;
-  nominees: Array<{ name: string; subtitle?: string; accentColor?: string }>;
+  nominees: Array<{ name: string; subtitle?: string; accentColor?: string; photoUrl?: string }>;
 }): Promise<string> {
   const id = generateSafeId('cat');
   const cleanTitle = input.title.trim().slice(0, 80);
@@ -288,6 +323,7 @@ export async function createCategoryInFirestore(input: {
         n.accentColor && /^#[0-9A-Fa-f]{6}$/.test(n.accentColor)
           ? n.accentColor
           : ACCENT_PALETTE[idx % ACCENT_PALETTE.length],
+      photoUrl: sanitizePhotoUrl(n.photoUrl),
     }));
 
   try {
@@ -314,7 +350,7 @@ export async function updateCategoryInFirestore(
     description?: string;
     isVotingOpen?: boolean;
     isWinnerRevealed?: boolean;
-    nominees?: Array<{ id?: string; name: string; subtitle?: string; accentColor?: string }>;
+    nominees?: Array<{ id?: string; name: string; subtitle?: string; accentColor?: string; photoUrl?: string }>;
   }
 ): Promise<void> {
   const payload: Record<string, unknown> = {
@@ -344,6 +380,7 @@ export async function updateCategoryInFirestore(
           n.accentColor && /^#[0-9A-Fa-f]{6}$/.test(n.accentColor)
             ? n.accentColor
             : ACCENT_PALETTE[idx % ACCENT_PALETTE.length],
+        photoUrl: sanitizePhotoUrl(n.photoUrl),
       }));
   }
 
@@ -600,6 +637,10 @@ export function subscribeAdminFirestore(
       ceremonySubtitle: ceremonyDoc.ceremonySubtitle,
       stageMode: ceremonyDoc.stageMode,
       activeCategoryId: ceremonyDoc.activeCategoryId ?? sortedCats[0]?.id ?? null,
+      revealedNomineeIndex:
+        typeof ceremonyDoc.revealedNomineeIndex === 'number'
+          ? ceremonyDoc.revealedNomineeIndex
+          : 0,
       showLiveTalliesOnScreen: false,
       connectedVotersCount: voters.length,
       connectedScreensCount: 1,
@@ -695,6 +736,7 @@ export function subscribePublicAudienceFirestore(
         ceremonySubtitle: 'Gala anual de reconocimientos en vivo',
         stageMode: 'lobby',
         activeCategoryId: null,
+        revealedNomineeIndex: 0,
         showLiveTalliesOnScreen: false,
         connectedVotersCount: 0,
         registeredVotersCount: 0,
@@ -722,6 +764,7 @@ export function subscribePublicAudienceFirestore(
             name: b.name,
             subtitle: b.subtitle,
             accentColor: b.accentColor,
+            photoUrl: b.photoUrl,
             votes: b.votes,
             percentage: b.percentage,
           })),
@@ -757,6 +800,10 @@ export function subscribePublicAudienceFirestore(
       ceremonySubtitle: ceremonyDoc.ceremonySubtitle,
       stageMode: ceremonyDoc.stageMode,
       activeCategoryId: ceremonyDoc.activeCategoryId,
+      revealedNomineeIndex:
+        typeof ceremonyDoc.revealedNomineeIndex === 'number'
+          ? ceremonyDoc.revealedNomineeIndex
+          : 0,
       showLiveTalliesOnScreen: false,
       connectedVotersCount: 0,
       registeredVotersCount: 0,

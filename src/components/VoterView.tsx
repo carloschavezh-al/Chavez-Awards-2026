@@ -9,6 +9,7 @@ import {
   registerVoterInFirestore,
 } from '../lib/firestoreCeremony';
 import type { PublicCategoryState, PublicCeremonyState, VoterVoteMap } from '../types';
+import NomineeAvatar from './NomineeAvatar';
 
 interface VoterViewProps {
   state: PublicCeremonyState | null;
@@ -349,8 +350,120 @@ export default function VoterView({
                 </motion.div>
               )}
 
+              {/* Single Active Category: One-by-One Nominee Presentation (before voting opens) */}
+              {activeCategory && state.stageMode === 'nominees' && activeCategory.nominees.length > 0 && (() => {
+                const safeIndex = Math.max(
+                  0,
+                  Math.min(activeCategory.nominees.length - 1, state.revealedNomineeIndex ?? 0)
+                );
+                const currentNominee = activeCategory.nominees[safeIndex];
+                const previouslyPresented = activeCategory.nominees.slice(0, safeIndex);
+
+                return (
+                  <motion.section
+                    key={`nominees-intro-${activeCategory.id}`}
+                    initial={{ opacity: 0, y: 14 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -14 }}
+                    transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+                    className="space-y-5"
+                  >
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
+                        <span className="text-amber-800">Presentación de candidatos</span>
+                        <span aria-hidden="true" className="text-stone-300">
+                          ·
+                        </span>
+                        <span className="font-mono-tabular text-slate-600">
+                          {safeIndex + 1} de {activeCategory.nominees.length}
+                        </span>
+                      </div>
+
+                      <h1 className="font-display text-2xl sm:text-3xl font-semibold text-slate-900 text-balance">
+                        {activeCategory.title}
+                      </h1>
+                      {activeCategory.description && (
+                        <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
+                          {activeCategory.description}
+                        </p>
+                      )}
+                    </div>
+
+                    <AnimatePresence mode="wait" initial={false}>
+                      <motion.div
+                        key={`voter-spotlight-${activeCategory.id}-${currentNominee.id}`}
+                        initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -10, scale: 0.98 }}
+                        transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+                        className="rounded-2xl bg-white border border-amber-300 p-5 sm:p-6 flex flex-col sm:flex-row items-center gap-5"
+                      >
+                        <NomineeAvatar
+                          name={currentNominee.name}
+                          photoUrl={currentNominee.photoUrl}
+                          accentColor={currentNominee.accentColor}
+                          fallbackLabel={String(safeIndex + 1)}
+                          className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl border border-stone-200"
+                          textClassName="text-2xl font-semibold"
+                        />
+                        <div className="min-w-0 flex-1 text-center sm:text-left space-y-1.5">
+                          <p className="text-xs font-mono-tabular font-semibold text-amber-800">
+                            Nominado {String(safeIndex + 1).padStart(2, '0')}
+                          </p>
+                          <h2 className="font-display text-2xl font-semibold text-slate-900 leading-snug">
+                            {currentNominee.name}
+                          </h2>
+                          {currentNominee.subtitle && (
+                            <p className="text-sm text-slate-600 leading-relaxed">
+                              {currentNominee.subtitle}
+                            </p>
+                          )}
+                        </div>
+                      </motion.div>
+                    </AnimatePresence>
+
+                    {previouslyPresented.length > 0 && (
+                      <div className="space-y-2.5 pt-2">
+                        <p className="text-xs font-medium text-slate-500">
+                          Candidatos presentados anteriormente
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          {previouslyPresented.map((nom, idx) => (
+                            <div
+                              key={nom.id}
+                              className="rounded-xl bg-white/80 border border-stone-200 p-3 flex items-center gap-3"
+                            >
+                              <NomineeAvatar
+                                name={nom.name}
+                                photoUrl={nom.photoUrl}
+                                accentColor={nom.accentColor}
+                                fallbackLabel={String(idx + 1)}
+                                className="w-10 h-10 rounded-lg"
+                                textClassName="text-xs font-semibold"
+                              />
+                              <div className="min-w-0">
+                                <p className="font-display text-sm font-semibold text-slate-900 truncate">
+                                  {nom.name}
+                                </p>
+                                {nom.subtitle && (
+                                  <p className="text-xs text-slate-500 truncate">{nom.subtitle}</p>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <p className="text-xs text-slate-500 text-center pt-2">
+                      La votación se habilitará aquí en cuanto termine la presentación de nominados.
+                    </p>
+                  </motion.section>
+                );
+              })()}
+
               {/* Single Active Category Voting Card (ONLY what the admin is presenting) */}
-              {activeCategory && (
+              {activeCategory && state.stageMode !== 'nominees' && (
                 <motion.section
                   key={`category-${activeCategory.id}`}
                   initial={{ opacity: 0, y: 14, scale: 0.99 }}
@@ -397,9 +510,19 @@ export default function VoterView({
                           transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
                           className="rounded-2xl bg-amber-50 border border-amber-300 p-5 flex items-center gap-4"
                         >
-                          <div className="w-11 h-11 rounded-xl bg-amber-700 text-white flex items-center justify-center shrink-0">
-                            <Award className="w-6 h-6" aria-hidden="true" />
-                          </div>
+                          {activeWinners[0].photoUrl ? (
+                            <NomineeAvatar
+                              name={activeWinners[0].name}
+                              photoUrl={activeWinners[0].photoUrl}
+                              accentColor={activeWinners[0].accentColor}
+                              className="w-14 h-14 rounded-xl border border-amber-300"
+                              textClassName="text-lg font-semibold"
+                            />
+                          ) : (
+                            <div className="w-12 h-12 rounded-xl bg-amber-700 text-white flex items-center justify-center shrink-0">
+                              <Award className="w-6 h-6" aria-hidden="true" />
+                            </div>
+                          )}
                           <div className="min-w-0">
                             <p className="text-xs font-medium text-amber-800">
                               {activeWinners.length > 1 ? 'Empate ganador' : 'Ganador anunciado'}
@@ -471,7 +594,7 @@ export default function VoterView({
                             setPendingNomineeId(nominee.id);
                             setErrorMsg(null);
                           }}
-                          className={`w-full min-h-[72px] text-left rounded-2xl p-4 sm:p-5 border transition-colors flex items-center justify-between gap-4 ${
+                          className={`w-full min-h-[76px] text-left rounded-2xl p-4 sm:p-5 border transition-colors flex items-center justify-between gap-4 ${
                             isMyChoice
                               ? 'bg-emerald-50/70 border-emerald-500 ring-1 ring-emerald-500'
                               : isPendingChoice
@@ -481,11 +604,14 @@ export default function VoterView({
                               : 'bg-white border-stone-200 hover:border-stone-400 active:scale-[0.99]'
                           }`}
                         >
-                          <div className="flex items-start gap-3.5 min-w-0">
-                            <span
-                              className="w-3 h-10 rounded-full shrink-0 mt-0.5"
-                              style={{ backgroundColor: nominee.accentColor || '#D97706' }}
-                              aria-hidden="true"
+                          <div className="flex items-center gap-3.5 min-w-0">
+                            <NomineeAvatar
+                              name={nominee.name}
+                              photoUrl={nominee.photoUrl}
+                              accentColor={nominee.accentColor || '#D97706'}
+                              fallbackLabel={String(idx + 1)}
+                              className="w-14 h-14 rounded-xl border border-stone-200"
+                              textClassName="text-base font-semibold"
                             />
                             <div className="min-w-0">
                               <p className="font-display text-lg font-semibold text-slate-900 leading-snug">

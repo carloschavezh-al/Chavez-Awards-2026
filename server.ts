@@ -118,7 +118,7 @@ function createInitialStore(): CeremonyStore {
     ceremonySubtitle: 'Gala anual de reconocimientos en vivo',
     stageMode: 'lobby',
     activeCategoryId: 'cat-chef',
-    revealedNomineeIndex: 0,
+    revealedNomineeIndex: -1,
     showLiveTalliesOnScreen: true,
     categories: createDefaultCategories(),
     votes: [],
@@ -144,8 +144,8 @@ function loadStore(): CeremonyStore {
         activeCategoryId: typeof parsed.activeCategoryId === 'string' ? parsed.activeCategoryId : fallback.activeCategoryId,
         revealedNomineeIndex:
           typeof parsed.revealedNomineeIndex === 'number' && Number.isFinite(parsed.revealedNomineeIndex)
-            ? Math.max(0, Math.min(20, Math.trunc(parsed.revealedNomineeIndex)))
-            : 0,
+            ? Math.max(-1, Math.min(20, Math.trunc(parsed.revealedNomineeIndex)))
+            : -1,
         showLiveTalliesOnScreen: typeof parsed.showLiveTalliesOnScreen === 'boolean' ? parsed.showLiveTalliesOnScreen : true,
         categories: Array.isArray(parsed.categories) && parsed.categories.length > 0 ? parsed.categories : fallback.categories,
         votes: Array.isArray(parsed.votes) ? parsed.votes : [],
@@ -816,7 +816,7 @@ async function startServer(): Promise<void> {
       }
     }
     if (typeof revealedNomineeIndex === 'number' && Number.isFinite(revealedNomineeIndex)) {
-      store.revealedNomineeIndex = Math.max(0, Math.min(20, Math.trunc(revealedNomineeIndex)));
+      store.revealedNomineeIndex = Math.max(-1, Math.min(20, Math.trunc(revealedNomineeIndex)));
     }
     if (typeof showLiveTalliesOnScreen === 'boolean') {
       store.showLiveTalliesOnScreen = showLiveTalliesOnScreen;

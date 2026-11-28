@@ -28,7 +28,7 @@
         },
         "revealedNomineeIndex": {
           "type": "integer",
-          "description": "Zero-based index of the nominee currently spotlighted during step-by-step nominee presentation (0 to 19)"
+          "description": "-1 for category intro only (before first nominee), or zero-based index (0 to 19) of the nominee currently spotlighted during step-by-step presentation"
         },
         "updatedAt": {
           "type": "string",

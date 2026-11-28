@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   Smartphone,
   Trash2,
+  Trophy,
   Unlock,
   X,
 } from 'lucide-react';
@@ -573,7 +574,7 @@ export default function AdminConsole() {
 
   const stageModes: Array<{ id: StageMode; label: string; hint: string }> = [
     { id: 'lobby', label: 'Bienvenida', hint: 'Muestra título y QR para unirse' },
-    { id: 'nominees', label: 'Presentar candidatos', hint: 'Muestra los nominados uno a uno con foto antes de votar' },
+    { id: 'nominees', label: 'Presentar candidatos', hint: 'Presenta primero la categoría y luego cada candidato uno a uno' },
     { id: 'category', label: 'Presentar y votar', hint: 'Muestra todas las opciones con fotos para votar' },
     { id: 'closed', label: 'Cerrar y suspenso', hint: 'Cierra votación antes de revelar' },
     { id: 'winner', label: 'Revelar ganador', hint: 'Anuncia al ganador con su foto y celebración' },
@@ -723,7 +724,7 @@ export default function AdminConsole() {
                         onClick={async () => {
                           const ok = await updateCeremony({
                             stageMode: m.id,
-                            ...(m.id === 'nominees' ? { revealedNomineeIndex: 0 } : {}),
+                            ...(m.id === 'nominees' ? { revealedNomineeIndex: -1 } : {}),
                           });
                           if (ok) showToast(`Pantalla cambiada a: ${m.label}`);
                         }}
@@ -746,15 +747,17 @@ export default function AdminConsole() {
                   })}
                 </div>
 
-                {/* One-by-one Nominee Presentation Stepper (shown when stageMode === 'nominees') */}
+                {/* One-by-one Nominee Presentation Stepper (starts at -1 = category intro only) */}
                 {adminState.stageMode === 'nominees' && activeCategory && activeCategory.nominees.length > 0 && (() => {
                   const totalNominees = activeCategory.nominees.length;
-                  const safeIndex = Math.max(
-                    0,
-                    Math.min(totalNominees - 1, adminState.revealedNomineeIndex ?? 0)
-                  );
-                  const currentNominee = activeCategory.nominees[safeIndex];
-                  const isFirst = safeIndex === 0;
+                  const rawIndex =
+                    typeof adminState.revealedNomineeIndex === 'number'
+                      ? adminState.revealedNomineeIndex
+                      : -1;
+                  const safeIndex = Math.max(-1, Math.min(totalNominees - 1, rawIndex));
+                  const isCategoryOnly = safeIndex < 0;
+                  const currentNominee = !isCategoryOnly ? activeCategory.nominees[safeIndex] : null;
+                  const isFirst = safeIndex <= -1;
                   const isLast = safeIndex >= totalNominees - 1;
 
                   return (
@@ -765,7 +768,9 @@ export default function AdminConsole() {
                             Presentación uno a uno · {activeCategory.title}
                           </p>
                           <p className="text-xs text-amber-800/80 mt-0.5 font-mono-tabular">
-                            Mostrando candidato {safeIndex + 1} de {totalNominees}
+                            {isCategoryOnly
+                              ? `Mostrando solo la categoría (${totalNominees} candidatos por presentar)`
+                              : `Mostrando candidato ${safeIndex + 1} de ${totalNominees}`}
                           </p>
                         </div>
                         <button
@@ -784,30 +789,51 @@ export default function AdminConsole() {
                         </button>
                       </div>
 
-                      <div className="bg-white rounded-xl border border-amber-200/80 p-3.5 flex items-center justify-between gap-4">
-                        <div className="flex items-center gap-3.5 min-w-0">
-                          <NomineeAvatar
-                            name={currentNominee.name}
-                            photoUrl={currentNominee.photoUrl}
-                            accentColor={currentNominee.accentColor}
-                            fallbackLabel={String(safeIndex + 1)}
-                            className="w-14 h-14 rounded-xl border border-slate-200"
-                            textClassName="text-base font-semibold"
-                          />
-                          <div className="min-w-0">
-                            <p className="text-[11px] font-mono-tabular font-semibold text-amber-800">
-                              Candidato {String(safeIndex + 1).padStart(2, '0')}
-                            </p>
-                            <p className="font-display text-lg font-semibold text-slate-900 truncate">
-                              {currentNominee.name}
-                            </p>
-                            {currentNominee.subtitle && (
-                              <p className="text-xs text-slate-500 truncate">
-                                {currentNominee.subtitle}
+                      <div className="bg-white rounded-xl border border-amber-200/80 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        {isCategoryOnly ? (
+                          <div className="flex items-center gap-3.5 min-w-0">
+                            <div className="w-14 h-14 rounded-xl border border-amber-200 bg-amber-50 text-amber-700 flex items-center justify-center shrink-0">
+                              <Trophy className="w-6 h-6" aria-hidden="true" />
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-[11px] font-mono-tabular font-semibold text-amber-800">
+                                Paso inicial · Solo categoría
                               </p>
-                            )}
+                              <p className="font-display text-lg font-semibold text-slate-900 truncate">
+                                {activeCategory.title}
+                              </p>
+                              <p className="text-xs text-slate-500 truncate">
+                                Aún no se muestra ningún candidato en pantalla
+                              </p>
+                            </div>
                           </div>
-                        </div>
+                        ) : (
+                          currentNominee && (
+                            <div className="flex items-center gap-3.5 min-w-0">
+                              <NomineeAvatar
+                                name={currentNominee.name}
+                                photoUrl={currentNominee.photoUrl}
+                                accentColor={currentNominee.accentColor}
+                                fallbackLabel={String(safeIndex + 1)}
+                                className="w-14 h-14 rounded-xl border border-slate-200"
+                                textClassName="text-base font-semibold"
+                              />
+                              <div className="min-w-0">
+                                <p className="text-[11px] font-mono-tabular font-semibold text-amber-800">
+                                  Candidato {String(safeIndex + 1).padStart(2, '0')}
+                                </p>
+                                <p className="font-display text-lg font-semibold text-slate-900 truncate">
+                                  {currentNominee.name}
+                                </p>
+                                {currentNominee.subtitle && (
+                                  <p className="text-xs text-slate-500 truncate">
+                                    {currentNominee.subtitle}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        )}
 
                         <div className="flex items-center gap-2 shrink-0">
                           <button
@@ -829,13 +855,30 @@ export default function AdminConsole() {
                             }
                             className="min-h-[38px] px-3.5 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 disabled:opacity-40 inline-flex items-center gap-1"
                           >
-                            <span>{isLast ? 'Último candidato' : 'Siguiente'}</span>
+                            <span>
+                              {isCategoryOnly
+                                ? 'Presentar 1.er candidato'
+                                : isLast
+                                ? 'Último candidato'
+                                : 'Siguiente'}
+                            </span>
                             {!isLast && <ChevronRight className="w-4 h-4" aria-hidden="true" />}
                           </button>
                         </div>
                       </div>
 
                       <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => updateCeremony({ revealedNomineeIndex: -1 })}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${
+                            isCategoryOnly
+                              ? 'bg-amber-700 text-white border-amber-700'
+                              : 'bg-white text-slate-700 border-amber-200 hover:bg-amber-100/60'
+                          }`}
+                        >
+                          00. Solo categoría
+                        </button>
                         {activeCategory.nominees.map((nom, idx) => (
                           <button
                             key={nom.id}
@@ -936,7 +979,7 @@ export default function AdminConsole() {
                             onClick={async () => {
                               const ok = await updateCeremony({
                                 activeCategoryId: cat.id,
-                                revealedNomineeIndex: 0,
+                                revealedNomineeIndex: -1,
                                 stageMode:
                                   adminState.stageMode === 'lobby' ||
                                   adminState.stageMode === 'summary' ||

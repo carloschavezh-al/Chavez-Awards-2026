@@ -46,7 +46,7 @@ service cloud.firestore {
         data.ceremonySubtitle is string && data.ceremonySubtitle.size() <= 140 &&
         isValidStageMode(data.stageMode) &&
         (!('activeCategoryId' in data) || data.activeCategoryId == null || isValidId(data.activeCategoryId)) &&
-        (!('revealedNomineeIndex' in data) || (data.revealedNomineeIndex is int && data.revealedNomineeIndex >= 0 && data.revealedNomineeIndex <= 20)) &&
+        (!('revealedNomineeIndex' in data) || (data.revealedNomineeIndex is int && data.revealedNomineeIndex >= -1 && data.revealedNomineeIndex <= 20)) &&
         data.updatedAt == request.time;
     }
 

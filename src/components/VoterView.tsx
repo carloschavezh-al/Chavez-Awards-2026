@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import confetti from 'canvas-confetti';
 import { Award, Check, CheckCircle2, Lock, Trophy, UserCheck } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
@@ -62,6 +63,7 @@ export default function VoterView({
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [justVotedMessage, setJustVotedMessage] = useState<string | null>(null);
+  const prevWinnerKeyRef = useRef<string | null>(null);
 
   // Restore existing voter registration from Firestore
   useEffect(() => {
@@ -214,6 +216,39 @@ export default function VoterView({
   );
   const activeWinners = activeCategory ? getCategoryWinners(activeCategory) : [];
 
+  useEffect(() => {
+    if (!state || isPreview || !isRegistered) return;
+    if (
+      state.stageMode === 'winner' &&
+      activeCategory &&
+      activeCategory.isWinnerRevealed &&
+      activeWinners.length > 0
+    ) {
+      const key = `${activeCategory.id}:${activeWinners.map((w) => w.id).join(',')}`;
+      if (prevWinnerKeyRef.current !== key) {
+        prevWinnerKeyRef.current = key;
+        const prefersReduced =
+          typeof window !== 'undefined' &&
+          window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+        if (!prefersReduced) {
+          try {
+            confetti({
+              particleCount: 70,
+              spread: 70,
+              origin: { y: 0.6 },
+              colors: ['#D4AF37', '#F3E5AB', '#F59E0B', '#FFFFFF'],
+              disableForReducedMotion: true,
+            });
+          } catch {
+            // Ignore confetti errors
+          }
+        }
+      }
+    } else {
+      prevWinnerKeyRef.current = null;
+    }
+  }, [state, activeCategory, activeWinners, isPreview, isRegistered]);
+
   return (
     <div
       className={`${
@@ -350,14 +385,20 @@ export default function VoterView({
                 </motion.div>
               )}
 
-              {/* Single Active Category: One-by-One Nominee Presentation (before voting opens) */}
+              {/* Single Active Category: Category Intro First, then One-by-One Nominee Presentation */}
               {activeCategory && state.stageMode === 'nominees' && activeCategory.nominees.length > 0 && (() => {
-                const safeIndex = Math.max(
-                  0,
-                  Math.min(activeCategory.nominees.length - 1, state.revealedNomineeIndex ?? 0)
-                );
-                const currentNominee = activeCategory.nominees[safeIndex];
-                const previouslyPresented = activeCategory.nominees.slice(0, safeIndex);
+                const rawIndex =
+                  typeof state.revealedNomineeIndex === 'number'
+                    ? state.revealedNomineeIndex
+                    : -1;
+                const isCategoryIntroOnly = rawIndex < 0;
+                const safeIndex = isCategoryIntroOnly
+                  ? -1
+                  : Math.min(activeCategory.nominees.length - 1, rawIndex);
+                const currentNominee =
+                  safeIndex >= 0 ? activeCategory.nominees[safeIndex] : null;
+                const previouslyPresented =
+                  safeIndex > 0 ? activeCategory.nominees.slice(0, safeIndex) : [];
 
                 return (
                   <motion.section
@@ -370,12 +411,18 @@ export default function VoterView({
                   >
                     <div className="space-y-2">
                       <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
-                        <span className="text-amber-800">Presentación de candidatos</span>
+                        <span className="text-amber-800">
+                          {isCategoryIntroOnly
+                            ? 'Presentación de categoría'
+                            : 'Presentación de candidatos'}
+                        </span>
                         <span aria-hidden="true" className="text-stone-300">
                           ·
                         </span>
                         <span className="font-mono-tabular text-slate-600">
-                          {safeIndex + 1} de {activeCategory.nominees.length}
+                          {isCategoryIntroOnly
+                            ? `${activeCategory.nominees.length} nominados`
+                            : `${safeIndex + 1} de ${activeCategory.nominees.length}`}
                         </span>
                       </div>
 
@@ -390,36 +437,63 @@ export default function VoterView({
                     </div>
 
                     <AnimatePresence mode="wait" initial={false}>
-                      <motion.div
-                        key={`voter-spotlight-${activeCategory.id}-${currentNominee.id}`}
-                        initial={{ opacity: 0, y: 12, scale: 0.98 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, y: -10, scale: 0.98 }}
-                        transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-                        className="rounded-2xl bg-white border border-amber-300 p-5 sm:p-6 flex flex-col sm:flex-row items-center gap-5"
-                      >
-                        <NomineeAvatar
-                          name={currentNominee.name}
-                          photoUrl={currentNominee.photoUrl}
-                          accentColor={currentNominee.accentColor}
-                          fallbackLabel={String(safeIndex + 1)}
-                          className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl border border-stone-200"
-                          textClassName="text-2xl font-semibold"
-                        />
-                        <div className="min-w-0 flex-1 text-center sm:text-left space-y-1.5">
-                          <p className="text-xs font-mono-tabular font-semibold text-amber-800">
-                            Nominado {String(safeIndex + 1).padStart(2, '0')}
-                          </p>
-                          <h2 className="font-display text-2xl font-semibold text-slate-900 leading-snug">
-                            {currentNominee.name}
+                      {isCategoryIntroOnly ? (
+                        <motion.div
+                          key={`voter-category-intro-${activeCategory.id}`}
+                          initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                          animate={{ opacity: 1, y: 0, scale: 1 }}
+                          exit={{ opacity: 0, y: -10, scale: 0.98 }}
+                          transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+                          className="rounded-2xl bg-white border border-amber-300 p-6 text-center space-y-3"
+                        >
+                          <div className="w-12 h-12 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center mx-auto">
+                            <Trophy className="w-6 h-6 text-amber-700" aria-hidden="true" />
+                          </div>
+                          <h2 className="font-display text-xl font-semibold text-slate-900 text-balance">
+                            Presentando esta categoría
                           </h2>
-                          {currentNominee.subtitle && (
-                            <p className="text-sm text-slate-600 leading-relaxed">
-                              {currentNominee.subtitle}
-                            </p>
-                          )}
-                        </div>
-                      </motion.div>
+                          <p className="text-sm text-slate-600 max-w-md mx-auto leading-relaxed">
+                            En un momento conocerás uno a uno a los{' '}
+                            <span className="font-mono-tabular font-semibold text-slate-800">
+                              {activeCategory.nominees.length}
+                            </span>{' '}
+                            candidatos antes de abrir la votación.
+                          </p>
+                        </motion.div>
+                      ) : (
+                        currentNominee && (
+                          <motion.div
+                            key={`voter-spotlight-${activeCategory.id}-${currentNominee.id}`}
+                            initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: -10, scale: 0.98 }}
+                            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+                            className="rounded-2xl bg-white border border-amber-300 p-5 sm:p-6 flex flex-col sm:flex-row items-center gap-5"
+                          >
+                            <NomineeAvatar
+                              name={currentNominee.name}
+                              photoUrl={currentNominee.photoUrl}
+                              accentColor={currentNominee.accentColor}
+                              fallbackLabel={String(safeIndex + 1)}
+                              className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl border border-stone-200"
+                              textClassName="text-2xl font-semibold"
+                            />
+                            <div className="min-w-0 flex-1 text-center sm:text-left space-y-1.5">
+                              <p className="text-xs font-mono-tabular font-semibold text-amber-800">
+                                Nominado {String(safeIndex + 1).padStart(2, '0')}
+                              </p>
+                              <h2 className="font-display text-2xl font-semibold text-slate-900 leading-snug">
+                                {currentNominee.name}
+                              </h2>
+                              {currentNominee.subtitle && (
+                                <p className="text-sm text-slate-600 leading-relaxed">
+                                  {currentNominee.subtitle}
+                                </p>
+                              )}
+                            </div>
+                          </motion.div>
+                        )
+                      )}
                     </AnimatePresence>
 
                     {previouslyPresented.length > 0 && (

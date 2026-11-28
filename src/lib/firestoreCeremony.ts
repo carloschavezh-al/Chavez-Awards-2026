@@ -195,7 +195,7 @@ export async function ensureInitialCeremonySeeded(): Promise<void> {
       ceremonySubtitle: 'Gala anual de reconocimientos en vivo',
       stageMode: 'lobby',
       activeCategoryId: seedCats[0].id,
-      revealedNomineeIndex: 0,
+      revealedNomineeIndex: -1,
       updatedAt: serverTimestamp(),
     });
     for (const cat of seedCats) {
@@ -236,8 +236,8 @@ export async function updateCeremonyInFirestore(
       ? patch.revealedNomineeIndex
       : currentState.revealedNomineeIndex;
   const nextRevealedNomineeIndex = Math.max(
-    0,
-    Math.min(20, Math.floor(typeof rawNomineeIndex === 'number' ? rawNomineeIndex : 0))
+    -1,
+    Math.min(20, Math.floor(typeof rawNomineeIndex === 'number' ? rawNomineeIndex : -1))
   );
 
   try {
@@ -640,7 +640,7 @@ export function subscribeAdminFirestore(
       revealedNomineeIndex:
         typeof ceremonyDoc.revealedNomineeIndex === 'number'
           ? ceremonyDoc.revealedNomineeIndex
-          : 0,
+          : -1,
       showLiveTalliesOnScreen: false,
       connectedVotersCount: voters.length,
       connectedScreensCount: 1,
@@ -736,7 +736,7 @@ export function subscribePublicAudienceFirestore(
         ceremonySubtitle: 'Gala anual de reconocimientos en vivo',
         stageMode: 'lobby',
         activeCategoryId: null,
-        revealedNomineeIndex: 0,
+        revealedNomineeIndex: -1,
         showLiveTalliesOnScreen: false,
         connectedVotersCount: 0,
         registeredVotersCount: 0,
@@ -803,7 +803,7 @@ export function subscribePublicAudienceFirestore(
       revealedNomineeIndex:
         typeof ceremonyDoc.revealedNomineeIndex === 'number'
           ? ceremonyDoc.revealedNomineeIndex
-          : 0,
+          : -1,
       showLiveTalliesOnScreen: false,
       connectedVotersCount: 0,
       registeredVotersCount: 0,

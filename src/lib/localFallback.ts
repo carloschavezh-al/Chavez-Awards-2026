@@ -110,7 +110,7 @@ function getLocalStore(): LocalStore {
     ceremonySubtitle: 'Gala anual de reconocimientos en vivo',
     stageMode: 'lobby',
     activeCategoryId: 'cat-chef',
-    revealedNomineeIndex: 0,
+    revealedNomineeIndex: -1,
     showLiveTalliesOnScreen: true,
     categories: defaultCategories(),
     votes: [],
@@ -199,7 +199,7 @@ export function getLocalPublicState(audience: 'screen' | 'voter'): PublicCeremon
     ceremonySubtitle: store.ceremonySubtitle,
     stageMode: store.stageMode,
     activeCategoryId: store.activeCategoryId,
-    revealedNomineeIndex: typeof store.revealedNomineeIndex === 'number' ? store.revealedNomineeIndex : 0,
+    revealedNomineeIndex: typeof store.revealedNomineeIndex === 'number' ? store.revealedNomineeIndex : -1,
     showLiveTalliesOnScreen: store.showLiveTalliesOnScreen,
     connectedVotersCount: Object.keys(store.voters).length,
     registeredVotersCount: Object.keys(store.voters).length,
@@ -253,7 +253,7 @@ export function getLocalAdminState(): AdminCeremonyState {
     ceremonySubtitle: store.ceremonySubtitle,
     stageMode: store.stageMode,
     activeCategoryId: store.activeCategoryId,
-    revealedNomineeIndex: typeof store.revealedNomineeIndex === 'number' ? store.revealedNomineeIndex : 0,
+    revealedNomineeIndex: typeof store.revealedNomineeIndex === 'number' ? store.revealedNomineeIndex : -1,
     showLiveTalliesOnScreen: store.showLiveTalliesOnScreen,
     connectedVotersCount: voters.length,
     connectedScreensCount: 1,
@@ -312,7 +312,7 @@ export function localAdminMutate(path: string, method: string, body: Record<stri
       store.activeCategoryId = (body.activeCategoryId as string | null) ?? null;
     }
     if (typeof body.revealedNomineeIndex === 'number') {
-      store.revealedNomineeIndex = Math.max(0, Math.min(20, Math.trunc(body.revealedNomineeIndex)));
+      store.revealedNomineeIndex = Math.max(-1, Math.min(20, Math.trunc(body.revealedNomineeIndex)));
     }
     if (typeof body.showLiveTalliesOnScreen === 'boolean') {
       store.showLiveTalliesOnScreen = body.showLiveTalliesOnScreen;

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 import { QRCodeSVG } from 'qrcode.react';
 import {
@@ -110,6 +110,66 @@ function derivePublicState(
       };
     }),
   };
+}
+
+function ScaledScreenPreview({
+  state,
+  connected,
+}: {
+  state: PublicCeremonyState;
+  connected: boolean;
+}) {
+  const outerRef = useRef<HTMLDivElement | null>(null);
+  const innerRef = useRef<HTMLDivElement | null>(null);
+  const VIRTUAL_WIDTH = 1120;
+  const [scale, setScale] = useState(0.4);
+  const [innerHeight, setInnerHeight] = useState(640);
+
+  useEffect(() => {
+    const outerEl = outerRef.current;
+    const innerEl = innerRef.current;
+    if (!outerEl || !innerEl) return;
+
+    const updateMeasurements = () => {
+      const w = outerEl.clientWidth;
+      if (w > 0) {
+        setScale(Math.min(1, w / VIRTUAL_WIDTH));
+      }
+      const h = innerEl.offsetHeight;
+      if (h > 0) {
+        setInnerHeight(h);
+      }
+    };
+
+    updateMeasurements();
+
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      updateMeasurements();
+    });
+    ro.observe(outerEl);
+    ro.observe(innerEl);
+    return () => ro.disconnect();
+  }, []);
+
+  return (
+    <div
+      ref={outerRef}
+      className="relative w-full rounded-xl overflow-hidden border border-slate-900/10 bg-[#0B0D12]"
+      style={{ height: Math.max(200, Math.ceil(innerHeight * scale)) }}
+    >
+      <div
+        ref={innerRef}
+        className="origin-top-left pointer-events-none select-none"
+        style={{
+          width: VIRTUAL_WIDTH,
+          transform: `scale(${scale})`,
+        }}
+      >
+        <PublicScreenView state={state} connected={connected} isPreview />
+      </div>
+    </div>
+  );
 }
 
 export default function AdminConsole() {
@@ -1051,11 +1111,7 @@ export default function AdminConsole() {
                   </a>
                 </div>
 
-                <div className="rounded-xl overflow-hidden border border-slate-900/10 bg-[#0B0D12]">
-                  <div className="origin-top-left w-[166.66%] scale-[0.6] h-[360px] pointer-events-none select-none overflow-hidden">
-                    <PublicScreenView state={publicScreenPreviewState} connected={connected} isPreview />
-                  </div>
-                </div>
+                <ScaledScreenPreview state={publicScreenPreviewState} connected={connected} />
               </section>
 
               {/* Share Voting Link & QR Code */}

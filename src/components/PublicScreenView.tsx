@@ -262,7 +262,7 @@ export default function PublicScreenView({
                 </div>
 
                 <div className="bg-white p-4 rounded-xl inline-block mx-auto">
-                  <QRCodeSVG value={voteUrl} size={isPreview ? 150 : 210} level="M" />
+                  <QRCodeSVG value={voteUrl} size={isPreview ? 190 : 210} level="M" />
                 </div>
 
                 <div className="space-y-2">

@@ -191,30 +191,20 @@ export default function VoterView({
     }
   };
 
-  if (!state || checkingSession) {
-    return (
-      <div
-        className={`${
-          isPreview ? 'min-h-[600px]' : 'min-h-screen'
-        } bg-[#FAF9F6] text-slate-900 flex flex-col items-center justify-center p-6`}
-      >
-        <div className="w-10 h-10 rounded-full border-2 border-amber-700/20 border-t-amber-700 animate-spin mb-3" />
-        <p className="text-sm font-medium text-slate-600">Cargando panel de votación...</p>
-      </div>
-    );
-  }
-
   const votedNomineeId = activeCategory ? myVotes[activeCategory.id] : undefined;
   const hasVotedInActive = Boolean(votedNomineeId);
   const votedNominee = activeCategory?.nominees.find((n) => n.id === votedNomineeId);
   const pendingNominee = activeCategory?.nominees.find((n) => n.id === pendingNomineeId);
   const canVoteNow = Boolean(
     activeCategory &&
-      state.stageMode === 'category' &&
+      state?.stageMode === 'category' &&
       activeCategory.isVotingOpen &&
       !hasVotedInActive
   );
-  const activeWinners = activeCategory ? getCategoryWinners(activeCategory) : [];
+  const activeWinners = useMemo(
+    () => (activeCategory ? getCategoryWinners(activeCategory) : []),
+    [activeCategory]
+  );
 
   useEffect(() => {
     if (!state || isPreview || !isRegistered) return;
@@ -248,6 +238,19 @@ export default function VoterView({
       prevWinnerKeyRef.current = null;
     }
   }, [state, activeCategory, activeWinners, isPreview, isRegistered]);
+
+  if (!state || checkingSession) {
+    return (
+      <div
+        className={`${
+          isPreview ? 'min-h-[600px]' : 'min-h-screen'
+        } bg-[#FAF9F6] text-slate-900 flex flex-col items-center justify-center p-6`}
+      >
+        <div className="w-10 h-10 rounded-full border-2 border-amber-700/20 border-t-amber-700 animate-spin mb-3" />
+        <p className="text-sm font-medium text-slate-600">Cargando panel de votación...</p>
+      </div>
+    );
+  }
 
   return (
     <div

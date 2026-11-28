@@ -725,13 +725,9 @@ export default function VoterView({
         )}
       </main>
 
-      {/* Discreet bottom admin access link (only shown on root landing page, never on /votar) */}
-      {adminFooterHref && !isPreview && (
-        <footer
-          className={`py-4 px-4 text-center border-t border-stone-200/70 bg-[#FAF9F6] ${
-            isRegistered && canVoteNow ? 'pb-24' : ''
-          }`}
-        >
+      {/* Discreet bottom admin access link (only shown on root entry screen before voter signs in) */}
+      {adminFooterHref && !isPreview && !isRegistered && (
+        <footer className="py-4 px-4 text-center border-t border-stone-200/70 bg-[#FAF9F6]">
           <a
             href={adminFooterHref}
             className="text-xs font-medium text-slate-500 hover:text-slate-900 underline underline-offset-4 transition-colors"
